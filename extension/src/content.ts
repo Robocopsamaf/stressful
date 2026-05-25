@@ -2,7 +2,8 @@ import browser from "webextension-polyfill";
 import { Settings } from "./types";
 import { findRussianTrack, requestCues } from "./captions";
 import { mountOverlay, Overlay } from "./overlay";
-import { analyzeBatch, primeSettings } from "./api";
+import { analyzeBatch, primeSettings, translateBatch } from "./api";
+import { Cue } from "./types";
 import { mountTooltip } from "./tooltip";
 import { mountSettingsPanel } from "./settings-panel";
 
@@ -44,12 +45,15 @@ async function setup(settings: Settings, videoId: string) {
   showBanner("Enable YouTube CC and pick the Russian track to activate Stressful Russian.");
 
   const tlang = settings.targetLang && settings.targetLang !== "ru" ? settings.targetLang : "";
-  const { ru: russianCues, tr: translatedCues } = await requestCues("ru", tlang);
+  const { ru: russianCues, tr: ytTranslatedCues } = await requestCues("ru", tlang);
   if (russianCues.length === 0) {
     showBanner("No Russian captions captured. Click YouTube CC button, select Russian track.");
     return;
   }
   hideBanner();
+
+  const translatedCues: Cue[] = ytTranslatedCues.slice();
+  const needsBackendTranslate = tlang && translatedCues.length === 0;
 
   const video = document.querySelector<HTMLVideoElement>("video.html5-main-video");
   const playerRoot = document.querySelector<HTMLElement>("#movie_player");
@@ -68,6 +72,30 @@ async function setup(settings: Settings, videoId: string) {
     onAnalyzeError: () => showBanner(`Cannot reach analyzer at ${settings.backendUrl}. Start the backend (see backend/README.md).`),
     onAnalyzeOk: () => hideBanner(),
   });
+
+  if (needsBackendTranslate) {
+    void backfillTranslations(russianCues, translatedCues, tlang);
+  }
+}
+
+async function backfillTranslations(ru: Cue[], target: Cue[], tlang: string) {
+  console.log("[stressful-russian] backend translate starting", { cues: ru.length, tlang });
+  const CHUNK = 50;
+  for (let start = 0; start < ru.length; start += CHUNK) {
+    const slice = ru.slice(start, start + CHUNK);
+    try {
+      const tr = await translateBatch(slice.map((c) => c.text), tlang, "ru");
+      slice.forEach((c, i) => {
+        target.push({ start: c.start, dur: c.dur, text: tr[i] ?? "" });
+      });
+      target.sort((a, b) => a.start - b.start);
+    } catch (e) {
+      console.warn("[stressful-russian] backend translate chunk failed", e);
+      showBanner(`Translation unavailable: ${(e as Error).message}`);
+      return;
+    }
+  }
+  console.log("[stressful-russian] backend translate done");
 }
 
 let banner: HTMLDivElement | null = null;

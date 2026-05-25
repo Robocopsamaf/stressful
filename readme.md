@@ -3,7 +3,7 @@
 A Firefox + Chrome extension that overlays YouTube videos with dual subtitles:
 
 - **Top line:** Russian text with stressed vowels marked (e.g. `приве́т`) and color-coded by part of speech.
-- **Bottom line:** translation in a language you choose, sourced from YouTube's auto-translate.
+- **Bottom line:** translation in a language you choose. Tries YouTube's auto-translate first; if YouTube rate-limits (HTTP 429) or returns empty, falls back to the local backend's `/translate` endpoint (Google Translate via `deep-translator`).
 
 Hovering any Russian word shows its lemma, part of speech, and morphology (case, number, gender, tense, person, aspect, mood).
 
@@ -12,18 +12,20 @@ Hovering any Russian word shows its lemma, part of speech, and morphology (case,
 ```
 ┌───────────────────┐   timedtext (intercepted)   ┌────────────────────┐
 │  YouTube watch    │ ──────────────────────────► │  Firefox extension │
-│  page (Firefox)   │                             │  (TypeScript, MV3) │
+│  page (Firefox)   │ ◄── tlang (or 429 → skip)   │  (TypeScript, MV3) │
 └───────────────────┘                             └─────────┬──────────┘
                                                             │ POST /analyze
+                                                            │ POST /translate (fallback)
                                                             ▼
                                               ┌──────────────────────────┐
                                               │ Local FastAPI backend    │
-                                              │ SpaCy + ruaccent (Python)│
+                                              │ SpaCy + ruaccent +       │
+                                              │ deep-translator (Python) │
                                               │ http://localhost:8765    │
                                               └──────────────────────────┘
 ```
 
-Browsers cannot run SpaCy or ruaccent, so a small Python backend (FastAPI) runs locally. The extension fetches YouTube's caption text (Russian + auto-translated target), batches sentences to the backend, receives per-token POS + morphology + stress, and renders the overlay.
+Browsers cannot run SpaCy or ruaccent, so a small Python backend (FastAPI) runs locally. The extension fetches YouTube's Russian caption track, tries YouTube's `tlang` for the translated track, and falls back to the backend's `/translate` (Google Translate via `deep-translator`) when YouTube rate-limits. Sentences are batched to `/analyze` for per-token POS + morphology + stress, and rendered in the overlay.
 
 ## Repository layout
 
@@ -71,7 +73,7 @@ Full walkthrough in [DEVELOPMENT.md](DEVELOPMENT.md).
 
 Right-click the extension's toolbar icon → **Manage Extension → Options**:
 
-- **Translated language** — what the bottom subtitle line shows. Uses YouTube auto-translate.
+- **Translated language** — what the bottom subtitle line shows. Tries YouTube auto-translate; falls back to backend `/translate` (Google Translate) if YouTube returns 429 / empty.
 - **Backend URL** — defaults to `http://localhost:8765`.
 - Toggles for stress marks, POS colors, and hover tooltips.
 
@@ -86,4 +88,4 @@ Proof of concept. Personal use only — not on AMO or the Chrome Web Store. Test
 ## Stack
 
 - TypeScript, esbuild, `webextension-polyfill`, web-ext (extension)
-- Python 3.9+, FastAPI, SpaCy `ru_core_news_sm`, ruaccent `1.5.8.3` (tiny mode)
+- Python 3.9+, FastAPI, SpaCy `ru_core_news_sm`, ruaccent `1.5.8.3` (tiny mode), `deep-translator` (Google Translate fallback), `transformers<5` (ruaccent's ONNX models need the legacy tokenizer contract)

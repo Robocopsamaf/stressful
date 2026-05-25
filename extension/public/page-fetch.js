@@ -85,17 +85,29 @@
   }
 
   async function fetchTranslated(baseUrl, tlang) {
-    try {
-      const u = new URL(baseUrl, location.origin);
-      u.searchParams.set("tlang", tlang);
-      const resp = await origFetch(u.toString(), { credentials: "include" });
-      const body = await resp.text();
-      console.log("[sr-bridge] translation fetch", { tlang, status: resp.status, bytes: body.length });
-      return body;
-    } catch (e) {
-      console.warn("[sr-bridge] translation fetch failed", e);
-      return "";
+    const u = new URL(baseUrl, location.origin);
+    u.searchParams.set("tlang", tlang);
+    const url = u.toString();
+    const delays = [0, 1500, 4000, 9000];
+    let lastStatus = 0;
+    for (let i = 0; i < delays.length; i++) {
+      if (delays[i]) await new Promise((r) => setTimeout(r, delays[i]));
+      try {
+        const resp = await origFetch(url, { credentials: "include" });
+        const body = await resp.text();
+        console.log("[sr-bridge] translation fetch", { tlang, attempt: i + 1, status: resp.status, bytes: body.length });
+        lastStatus = resp.status;
+        if (resp.status === 200 && body && (body.trimStart().startsWith("{") || body.trimStart().startsWith("<?xml") || body.includes("<text"))) {
+          return body;
+        }
+        if (resp.status !== 429) return "";
+      } catch (e) {
+        console.warn("[sr-bridge] translation fetch failed", e);
+        return "";
+      }
     }
+    console.warn("[sr-bridge] translation gave up", { tlang, lastStatus });
+    return "";
   }
 
   window.addEventListener("message", async (ev) => {

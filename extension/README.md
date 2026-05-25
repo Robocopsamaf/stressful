@@ -40,7 +40,7 @@ Two content scripts inject on `https://www.youtube.com/*`:
 
 | Script | World | When | Purpose |
 | --- | --- | --- | --- |
-| `page-fetch.js` | MAIN | `document_start` | Monkey-patches `fetch` + `XMLHttpRequest`. Captures bodies of `api/timedtext` requests (the only way to get a valid `pot`-signed caption URL). Listens for `sr-captions-req` postMessages and fetches translations by appending `tlang` to a captured URL. |
+| `page-fetch.js` | MAIN | `document_start` | Monkey-patches `fetch` + `XMLHttpRequest`. Captures bodies of `api/timedtext` requests (the only way to get a valid `pot`-signed caption URL). Listens for `sr-captions-req` postMessages and fetches translations by appending `tlang` to a captured URL, retrying up to 4 times on HTTP 429. |
 | `content.js` | ISOLATED | `document_idle` | Reads `ytInitialPlayerResponse` to verify a Russian track exists, asks the bridge for cues, mounts the overlay, syncs to `video.currentTime`, calls the backend per cue, renders tokens and the morphology tooltip. |
 
 `styles.css` adds the overlay styles, POS colors, tooltip box, and a rule hiding `.ytp-caption-window-container` so the native caption window doesn't overlap ours.
@@ -55,7 +55,7 @@ src/
 ├── background.ts   service worker, settings storage + message router
 ├── content.ts      entry on youtube.com; SPA-aware URL watcher; mounts/destroys overlay
 ├── captions.ts     findRussianTrack(), requestCues() (postMessage bridge wrapper), JSON3/XML parsing
-├── api.ts          POST /analyze, in-memory cache by sentence text
+├── api.ts          POST /analyze + POST /translate, in-memory caches by text
 ├── overlay.ts      dual-line overlay, rAF sync, prefetch next 5 cues
 ├── tooltip.ts      shared morph tooltip on hover
 ├── options.ts      options page UI
@@ -75,6 +75,7 @@ public/
 3. A red banner appears top-right: *"Enable YouTube CC and pick the Russian track to activate Stressful Russian."*
 4. Click YouTube's **CC** button. If multiple subtitle tracks exist, open the gear icon → **Subtitles/CC** and select Russian.
 5. The bridge captures the caption response (and, if a target language is configured, fetches the auto-translated version using the same signed URL). The banner disappears; the overlay renders.
+6. If YouTube's `tlang` returns HTTP 429 for every retry (common on residential IPs that have done a lot of auto-translate requests recently), the overlay mounts immediately with the Russian line only and `content.ts` calls the backend's `POST /translate` in the background, chunked 50 cues at a time, filling the bottom line progressively.
 
 ## Common edits
 

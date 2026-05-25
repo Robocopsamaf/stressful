@@ -123,6 +123,7 @@ export function mountOverlay(deps: OverlayDeps): Overlay {
   }
 
   let currentIdx = -2;
+  let lastTrText = "";
   let raf = 0;
   let stopped = false;
 
@@ -137,6 +138,7 @@ export function mountOverlay(deps: OverlayDeps): Overlay {
       if (idx < 0) {
         ruLine.textContent = "";
         trLine.textContent = "";
+        lastTrText = "";
         return;
       }
       const cue = russianCues[idx];
@@ -152,15 +154,22 @@ export function mountOverlay(deps: OverlayDeps): Overlay {
           }
         });
       }
-      if (translatedCues.length > 0) {
-        const tcue = findTranslatedFor(translatedCues, cue);
-        trLine.textContent = tcue ? tcue.text : "";
-      } else {
-        trLine.textContent = "";
-      }
       const prefetch: number[] = [];
       for (let k = 1; k <= PREFETCH_AHEAD; k++) prefetch.push(idx + k);
       ensureAnalyzed(prefetch);
+    }
+
+    // Update translation each frame so async backfill becomes visible mid-cue.
+    if (currentIdx >= 0 && translatedCues.length > 0) {
+      const tcue = findTranslatedFor(translatedCues, russianCues[currentIdx]);
+      const next = tcue ? tcue.text : "";
+      if (next !== lastTrText) {
+        trLine.textContent = next;
+        lastTrText = next;
+      }
+    } else if (lastTrText !== "") {
+      trLine.textContent = "";
+      lastTrText = "";
     }
   }
 

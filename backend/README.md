@@ -34,6 +34,7 @@ Default port `8765`. Override with extra args, e.g. `./run.sh --port 9000`.
 
 - `GET /health` → `{"ok": true}`
 - `POST /analyze` — request body `{ "sentences": ["..."] }`, response `{ "sentences": [{ "text": "...", "tokens": [...] }] }`.
+- `POST /translate` — request body `{ "texts": ["..."], "target": "sv", "source": "ru" }` (source defaults to `ru`), response `{ "translations": ["..."] }`. Backed by `deep-translator`'s `GoogleTranslator` (Google Translate web). Used as a fallback by the extension when YouTube's `tlang` auto-translate returns HTTP 429.
 
 Each token:
 
@@ -63,7 +64,7 @@ Expect every Russian word to have `accented` containing a `U+0301` combining acu
 
 ## Caching
 
-Sentences are memoized in an in-process LRU (`maxsize=4096`). Repeated playback of the same video re-uses cached analyses — no duplicate work.
+Sentences are memoized in an in-process LRU (`maxsize=4096`). Repeated playback of the same video re-uses cached analyses — no duplicate work. `/translate` keeps a separate in-process cache keyed by `(source, target, text)` (cap 16k entries).
 
 ## Tuning
 
@@ -78,3 +79,5 @@ Sentences are memoized in an in-process LRU (`maxsize=4096`). Repeated playback 
 - **`OSError: [E050] Can't find model 'ru_core_news_sm'`** — run `python -m spacy download ru_core_news_sm`.
 - **Port already in use** — pass `--port <N>` to `run.sh` and update the extension's Backend URL in the options page.
 - **Ruaccent first request slow** — the tiny model is downloading. Subsequent requests are fast (sub-100 ms per cached sentence).
+- **Stress marks missing (every `accented` equals `surface`)** — usually means `transformers>=5` is installed; ruaccent's ONNX models require the legacy tokenizer contract (`token_type_ids` in the default output). `requirements.txt` pins `transformers<5`; `analyzer.py` also monkey-patches `put_accent` / `predict_stress_usage` to inject zero `token_type_ids` as a safety net. Reinstall with `pip install -r requirements.txt` if you see this.
+- **`/translate` returns empty strings** — `deep-translator` scrapes Google Translate web and occasionally hits its own rate limit. Failures are logged with `[translate] chunk failed: …`. Retry after a few minutes, or swap to `LibreTranslate`.

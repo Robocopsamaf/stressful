@@ -7,6 +7,73 @@ from typing import Dict, List, Optional
 
 from pydantic import BaseModel
 
+
+def _patch_ruaccent_token_type_ids() -> None:
+    """ruaccent ships ONNX models that require `token_type_ids`, but transformers
+    5.x dropped that input from the default tokenizer output. Wrap the affected
+    `session.run` calls so a zero `token_type_ids` array is supplied when the
+    model expects it. Safe to call repeatedly."""
+    import numpy as np
+    from ruaccent import accent_model as _am
+    from ruaccent import stress_usage_model as _sum
+
+    def _ensure_token_type_ids(session, inputs):
+        names = {i.name for i in session.get_inputs()}
+        if "token_type_ids" in names and "token_type_ids" not in inputs:
+            inputs = dict(inputs)
+            inputs["token_type_ids"] = np.zeros_like(inputs["input_ids"])
+        return inputs
+
+    if not getattr(_am.AccentModel, "_srl_patched", False):
+        orig_put_accent = _am.AccentModel.put_accent
+
+        def put_accent(self, word):
+            lower_word = word.lower()
+            inputs = self.tokenizer(lower_word, return_tensors="np")
+            inputs = {k: v.astype(np.int64) for k, v in inputs.items()}
+            inputs = _ensure_token_type_ids(self.session, inputs)
+            outputs = self.session.run(None, inputs)
+            output_names = {o.name: idx for idx, o in enumerate(self.session.get_outputs())}
+            logits = outputs[output_names["logits"]]
+            e = np.exp(logits - np.max(logits, axis=-1, keepdims=True))
+            probabilities = e / e.sum(axis=-1, keepdims=True)
+            scores = np.max(probabilities, axis=-1)[0]
+            labels = np.argmax(logits, axis=-1)[0]
+            pred_with_scores = [
+                {"label": self.id2label[str(label)], "score": float(score)}
+                for label, score in zip(labels, scores)
+            ]
+            return self.render_stress(word, pred_with_scores)
+
+        _am.AccentModel.put_accent = put_accent
+        _am.AccentModel._srl_patched = True
+
+    if not getattr(_sum.StressUsagePredictorModel, "_srl_patched", False):
+        def predict_stress_usage(self, text):
+            inputs = self.tokenizer(
+                text,
+                return_offsets_mapping=True,
+                return_special_tokens_mask=True,
+                return_tensors="np",
+            )
+            offset_mapping = inputs.pop("offset_mapping")[0]
+            special_tokens_mask = inputs.pop("special_tokens_mask")[0]
+            input_ids = inputs["input_ids"][0]
+            inputs = {k: v.astype(np.int64) for k, v in inputs.items()}
+            inputs = _ensure_token_type_ids(self.session, inputs)
+            outputs = self.session.run(None, inputs)
+            logits = outputs[0]
+            maxes = np.max(logits, axis=-1, keepdims=True)
+            shifted_exp = np.exp(logits - maxes)
+            scores = shifted_exp / shifted_exp.sum(axis=-1, keepdims=True)
+            pre_entities = self.collect_pre_entities(
+                text, input_ids, scores[0], offset_mapping, special_tokens_mask
+            )
+            return self.aggregate_words(pre_entities, "AVERAGE")
+
+        _sum.StressUsagePredictorModel.predict_stress_usage = predict_stress_usage
+        _sum.StressUsagePredictorModel._srl_patched = True
+
 ACUTE = "́"
 _PLUS_MARK_RE = re.compile(r"\+([а-яёА-ЯЁ])")
 
@@ -65,6 +132,7 @@ class Analyzer:
         import spacy
         from ruaccent import RUAccent
 
+        _patch_ruaccent_token_type_ids()
         self.nlp = spacy.load("ru_core_news_sm")
         self.accentizer = RUAccent()
         self.accentizer.load(
@@ -76,7 +144,8 @@ class Analyzer:
     def _accent(self, text: str) -> str:
         try:
             raw = self.accentizer.process_all(text)
-        except Exception:
+        except Exception as e:
+            print(f"[analyzer] accentizer failed: {type(e).__name__}: {e}", flush=True)
             return text
         # ruaccent tiny_mode marks stress with "+" before the stressed vowel.
         # Convert to U+0301 combining acute after the vowel so the frontend can
