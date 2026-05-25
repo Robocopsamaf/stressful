@@ -1,0 +1,21 @@
+# Python
+backend/.venv/
+backend/__pycache__/
+backend/**/__pycache__/
+*.pyc
+
+# Node / extension build
+extension/node_modules/
+extension/dist/
+extension/dist-firefox/
+extension/dist-chrome/
+extension/web-ext-artifacts/
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Tooling caches / local agent state
+.claude/
+.antigravitycli/

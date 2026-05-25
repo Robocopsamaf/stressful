@@ -1,0 +1,329 @@
+/* Hide native YouTube caption window so only our overlay shows */
+.ytp-caption-window-container {
+  display: none !important;
+}
+
+/* ===== overlay on the YouTube player ===== */
+#sr-overlay {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 8%; /* overridden by inline style from settings.overlayPosition */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  pointer-events: none;
+  z-index: 60;
+  text-align: center;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  text-shadow: 0 0 4px rgba(0, 0, 0, 0.9), 0 0 2px rgba(0, 0, 0, 0.9);
+}
+
+.sr-line {
+  pointer-events: auto;
+  padding: 4px 12px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  max-width: 90%;
+  line-height: 1.35;
+}
+
+.sr-ru {
+  font-size: 26px;
+  font-weight: 500;
+}
+
+.sr-tr {
+  font-size: 20px;
+  color: #ddd;
+  font-style: italic;
+}
+
+.sr-tok {
+  display: inline;
+}
+
+.sr-tok[data-morph] {
+  cursor: help;
+}
+
+.sr-tok[data-morph]:hover {
+  text-decoration: underline dotted rgba(255, 255, 255, 0.6) 1px;
+}
+
+/* POS colors */
+.sr-verb { color: #ff8a65; }
+.sr-noun { color: #80d8ff; }
+.sr-adj  { color: #b388ff; }
+.sr-pron { color: #ffd54f; }
+.sr-num  { color: #69f0ae; }
+.sr-adv  { color: #f8bbd0; }
+.sr-other { color: #ffffff; }
+
+/* ===== morphology tooltip ===== */
+#sr-tooltip {
+  position: absolute;
+  z-index: 2147483647;
+  max-width: 320px;
+  padding: 8px 10px;
+  background: #1c1c1f;
+  color: #f5f5f5;
+  border: 1px solid #444;
+  border-radius: 6px;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 13px;
+  line-height: 1.4;
+  pointer-events: none;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+}
+
+.sr-tt-header {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.sr-tt-body {
+  color: #cfcfcf;
+  font-size: 12px;
+}
+
+/* ===== in-page settings panel + gear ===== */
+#sr-gear {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(20, 20, 22, 0.7);
+  color: #fff;
+  font-size: 18px;
+  line-height: 32px;
+  text-align: center;
+  cursor: pointer;
+  z-index: 2147483646;
+  padding: 0;
+}
+
+#sr-gear:hover {
+  background: rgba(40, 40, 44, 0.9);
+}
+
+#sr-panel {
+  position: fixed;
+  top: 56px;
+  right: 12px;
+  width: 320px;
+  z-index: 2147483647;
+  background: #1c1c1f;
+  color: #f5f5f5;
+  border: 1px solid #444;
+  border-radius: 8px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.55);
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 13px;
+}
+
+.sr-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid #2e2e32;
+}
+
+.sr-panel-title {
+  font-weight: 600;
+}
+
+.sr-panel-close {
+  background: transparent;
+  color: #aaa;
+  border: 0;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.sr-panel-close:hover {
+  color: #fff;
+}
+
+.sr-panel-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+}
+
+.sr-panel-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sr-panel-field span {
+  color: #cfcfcf;
+  font-size: 12px;
+}
+
+.sr-panel-field select,
+.sr-panel-field input[type="url"],
+.sr-panel-field input[type="range"] {
+  width: 100%;
+  padding: 6px 8px;
+  background: #111;
+  border: 1px solid #333;
+  color: #f5f5f5;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.sr-panel-field input[type="range"] {
+  padding: 0;
+}
+
+.sr-panel-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.sr-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.sr-panel-save {
+  background: #3a7afe;
+  color: white;
+  border: 0;
+  padding: 6px 14px;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.sr-panel-status {
+  color: #69f0ae;
+  font-size: 12px;
+}
+
+/* ===== options page + popup ===== */
+.sr-options-page,
+.sr-popup-page {
+  margin: 0;
+  background: #111;
+  color: #eee;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+}
+
+.sr-options {
+  max-width: 540px;
+  margin: 0 auto;
+  padding: 28px 24px;
+}
+
+.sr-options h1 {
+  margin-top: 0;
+  font-size: 22px;
+}
+
+.sr-hint {
+  color: #aaa;
+  font-size: 13px;
+}
+
+.sr-options form label {
+  display: block;
+  margin: 14px 0;
+}
+
+.sr-options form label span {
+  display: block;
+  margin-bottom: 4px;
+  font-weight: 500;
+}
+
+.sr-options input[type="url"],
+.sr-options select {
+  width: 100%;
+  padding: 7px 9px;
+  background: #1c1c1f;
+  border: 1px solid #444;
+  color: #eee;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.sr-options fieldset {
+  border: 1px solid #333;
+  border-radius: 6px;
+  padding: 8px 14px 12px;
+  margin-top: 16px;
+}
+
+.sr-options legend {
+  padding: 0 6px;
+  color: #aaa;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.sr-check {
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+}
+
+.sr-check span {
+  display: inline !important;
+  margin: 0 !important;
+  font-weight: 400 !important;
+}
+
+.sr-actions {
+  margin-top: 18px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.sr-actions button {
+  background: #3a7afe;
+  color: white;
+  border: 0;
+  padding: 8px 18px;
+  border-radius: 4px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.sr-status {
+  color: #69f0ae;
+  font-size: 13px;
+}
+
+/* When the panel is embedded in the toolbar popup */
+.sr-popup-page {
+  margin: 0;
+  background: #1c1c1f;
+}
+
+.sr-popup-page #sr-panel.sr-popup-embedded {
+  position: static;
+  width: 320px;
+  top: auto;
+  right: auto;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}

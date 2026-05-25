@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Stressful Russian — Options</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="sr-options-page">
+    <main class="sr-options">
+      <h1>Stressful Russian</h1>
+      <p class="sr-hint">
+        Make sure the local analyzer backend is running at the URL below. See
+        <code>backend/README.md</code> for setup instructions.
+      </p>
+
+      <form id="sr-form">
+        <label>
+          <span>Translated language</span>
+          <select name="targetLang" id="sr-lang"></select>
+        </label>
+
+        <label>
+          <span>Backend URL</span>
+          <input type="url" name="backendUrl" id="sr-backend" />
+        </label>
+
+        <fieldset>
+          <legend>Display</legend>
+          <label class="sr-check">
+            <input type="checkbox" name="enabled" id="sr-enabled" />
+            <span>Enable extension</span>
+          </label>
+          <label class="sr-check">
+            <input type="checkbox" name="showStress" id="sr-stress" />
+            <span>Show stress marks</span>
+          </label>
+          <label class="sr-check">
+            <input type="checkbox" name="showColors" id="sr-colors" />
+            <span>Color code by part of speech</span>
+          </label>
+          <label class="sr-check">
+            <input type="checkbox" name="showTooltips" id="sr-tooltips" />
+            <span>Show morphology tooltips on hover</span>
+          </label>
+
+          <label>
+            <span>Vertical position: <output id="sr-pos-val">8%</output> from top</span>
+            <input type="range" name="overlayPosition" id="sr-pos" min="0" max="95" step="1" />
+          </label>
+        </fieldset>
+
+        <div class="sr-actions">
+          <button type="submit">Save</button>
+          <span id="sr-status" class="sr-status"></span>
+        </div>
+      </form>
+    </main>
+    <script src="options.js"></script>
+  </body>
+</html>

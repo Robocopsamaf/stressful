@@ -1,0 +1,50 @@
+{
+  "manifest_version": 3,
+  "name": "Stressful Russian",
+  "version": "0.1.0",
+  "description": "Dual Russian + translated YouTube subtitles with stress marks and morphology tooltips.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "stressful-russian@local",
+      "strict_min_version": "115.0"
+    }
+  },
+  "permissions": ["storage", "activeTab"],
+  "host_permissions": [
+    "https://www.youtube.com/*",
+    "https://*.youtube.com/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.youtube.com/*"],
+      "js": ["page-fetch.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://www.youtube.com/*"],
+      "js": ["content.js"],
+      "css": ["styles.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Stressful Russian"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["styles.css"],
+      "matches": ["https://www.youtube.com/*"]
+    }
+  ]
+}
