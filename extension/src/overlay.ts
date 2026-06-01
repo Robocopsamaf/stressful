@@ -5,6 +5,7 @@ export interface OverlayDeps {
   video: HTMLVideoElement;
   russianCues: Cue[];
   translatedCues: Cue[];
+  translatedByIdx?: (string | undefined)[];
   settings: Settings;
   analyze: (texts: string[]) => Promise<AnalyzedSentence[]>;
   onAnalyzeError?: (err: unknown) => void;
@@ -84,7 +85,7 @@ function renderAnalyzed(target: HTMLElement, sentence: AnalyzedSentence, setting
 }
 
 export function mountOverlay(deps: OverlayDeps): Overlay {
-  const { root, video, russianCues, translatedCues, settings, analyze, onAnalyzeError, onAnalyzeOk } = deps;
+  const { root, video, russianCues, translatedCues, translatedByIdx, settings, analyze, onAnalyzeError, onAnalyzeOk } = deps;
 
   const wrap = document.createElement("div");
   wrap.id = "sr-overlay";
@@ -115,7 +116,7 @@ export function mountOverlay(deps: OverlayDeps): Overlay {
       result.forEach((s, k) => analyzed.set(need[k].idx, s));
       onAnalyzeOk?.();
     } catch (e) {
-      console.warn("[stressful-russian] analyze failed", e);
+      console.warn("[stressful] analyze failed", e);
       onAnalyzeError?.(e);
     } finally {
       need.forEach((n) => pending.delete(n.idx));
@@ -160,16 +161,22 @@ export function mountOverlay(deps: OverlayDeps): Overlay {
     }
 
     // Update translation each frame so async backfill becomes visible mid-cue.
-    if (currentIdx >= 0 && translatedCues.length > 0) {
-      const tcue = findTranslatedFor(translatedCues, russianCues[currentIdx]);
-      const next = tcue ? tcue.text : "";
-      if (next !== lastTrText) {
-        trLine.textContent = next;
-        lastTrText = next;
+    // Prefer the index-keyed map (exact 1:1 with source cues) when available;
+    // fall back to time-based lookup for the YT-tlang track whose cues have
+    // their own timings.
+    let next = "";
+    if (currentIdx >= 0) {
+      const fromIdx = translatedByIdx ? translatedByIdx[currentIdx] : undefined;
+      if (fromIdx) {
+        next = fromIdx;
+      } else if (translatedCues.length > 0) {
+        const tcue = findTranslatedFor(translatedCues, russianCues[currentIdx]);
+        if (tcue) next = tcue.text;
       }
-    } else if (lastTrText !== "") {
-      trLine.textContent = "";
-      lastTrText = "";
+    }
+    if (next !== lastTrText) {
+      trLine.textContent = next;
+      lastTrText = next;
     }
   }
 

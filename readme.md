@@ -1,11 +1,11 @@
-# Stressful Russian
+# Stressful
 
 A Firefox + Chrome extension that overlays YouTube videos with dual subtitles:
 
-- **Top line:** Russian text with stressed vowels marked (e.g. `приве́т`) and color-coded by part of speech.
+- **Top line:** Russian or Ukrainian text with stressed vowels marked (e.g. `приве́т`, `приві́т`) and color-coded by part of speech.
 - **Bottom line:** translation in a language you choose. Tries YouTube's auto-translate first; if YouTube rate-limits (HTTP 429) or returns empty, falls back to the local backend's `/translate` endpoint (Google Translate via `deep-translator`).
 
-Hovering any Russian word shows its lemma, part of speech, and morphology (case, number, gender, tense, person, aspect, mood).
+The source language is auto-detected from the available YouTube caption tracks (ru preferred, then uk). Hovering any source-language word shows its lemma, part of speech, and morphology (case, number, gender, tense, person, aspect, mood).
 
 ## Architecture
 
@@ -20,20 +20,21 @@ Hovering any Russian word shows its lemma, part of speech, and morphology (case,
                                               ┌──────────────────────────┐
                                               │ Local FastAPI backend    │
                                               │ SpaCy + ruaccent +       │
+                                              │ ukrainian-word-stress +  │
                                               │ deep-translator (Python) │
                                               │ http://localhost:8765    │
                                               └──────────────────────────┘
 ```
 
-Browsers cannot run SpaCy or ruaccent, so a small Python backend (FastAPI) runs locally. The extension fetches YouTube's Russian caption track, tries YouTube's `tlang` for the translated track, and falls back to the backend's `/translate` (Google Translate via `deep-translator`) when YouTube rate-limits. Sentences are batched to `/analyze` for per-token POS + morphology + stress, and rendered in the overlay.
+Browsers cannot run SpaCy / ruaccent / ukrainian-word-stress, so a small Python backend (FastAPI) runs locally. The extension fetches the captured caption track (ru or uk), tries YouTube's `tlang` for the translated track, and falls back to the backend's `/translate` when YouTube rate-limits. Sentences are batched to `/analyze` with a `source` lang field for per-token POS + morphology + stress, and rendered in the overlay.
 
 ## Repository layout
 
 ```
-stressful-russian/
+stressful/
 ├── readme.md            ← this file
 ├── DEVELOPMENT.md       ← full dev setup walkthrough
-├── backend/             ← FastAPI + SpaCy + ruaccent
+├── backend/             ← FastAPI + SpaCy + ruaccent + ukrainian-word-stress
 │   └── README.md        ← backend install & smoke-test
 ├── extension/           ← MV3 extension (TypeScript) — Firefox + Chrome
 │   └── README.md        ← extension build & load
@@ -49,6 +50,8 @@ stressful-russian/
    python3 -m venv .venv && source .venv/bin/activate
    pip install -r requirements.txt
    python -m spacy download ru_core_news_sm
+   python -m spacy download uk_core_news_sm
+   python -c "from ukrainian_word_stress import Stressifier; Stressifier()('привіт')"   # warms ~500MB Stanza data
    ./run.sh                       # http://127.0.0.1:8765
    ```
 
@@ -65,7 +68,7 @@ stressful-russian/
    - **Firefox** — `about:debugging#/runtime/this-firefox` → **Load Temporary Add-on…** → pick `extension/dist-firefox/manifest.json`
    - **Chrome** (or Edge / Brave) — `chrome://extensions` → enable **Developer mode** → **Load unpacked** → pick `extension/dist-chrome/`
 
-4. Open a YouTube video that has a Russian caption track. Click YouTube's **CC** button and select the Russian track (gear icon → Subtitles/CC → Russian). The extension intercepts the caption fetch, hides the native caption window, and renders the dual overlay.
+4. Open a YouTube video that has a Russian or Ukrainian caption track. Click YouTube's **CC** button and select that track (gear icon → Subtitles/CC → Russian / Ukrainian). The extension intercepts the caption fetch, hides the native caption window, and renders the dual overlay.
 
 Full walkthrough in [DEVELOPMENT.md](DEVELOPMENT.md).
 
@@ -88,4 +91,4 @@ Proof of concept. Personal use only — not on AMO or the Chrome Web Store. Test
 ## Stack
 
 - TypeScript, esbuild, `webextension-polyfill`, web-ext (extension)
-- Python 3.9+, FastAPI, SpaCy `ru_core_news_sm`, ruaccent `1.5.8.3` (tiny mode), `deep-translator` (Google Translate fallback), `transformers<5` (ruaccent's ONNX models need the legacy tokenizer contract)
+- Python 3.9+, FastAPI, SpaCy `ru_core_news_sm` + `uk_core_news_sm`, ruaccent `1.5.8.3` (tiny mode), `ukrainian-word-stress` `1.1.1` (dictionary-based, U+0301 combining acute), `deep-translator` (Google Translate fallback), `transformers<5` (ruaccent's ONNX models need the legacy tokenizer contract)

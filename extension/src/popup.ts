@@ -8,4 +8,4 @@ async function init() {
   root.appendChild(form);
 }
 
-init().catch((e) => console.error("[stressful-russian] popup init failed", e));
+init().catch((e) => console.error("[stressful] popup init failed", e));

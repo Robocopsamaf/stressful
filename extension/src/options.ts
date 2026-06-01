@@ -66,4 +66,4 @@ async function init() {
   });
 }
 
-init().catch((e) => console.error("[stressful-russian] options init failed", e));
+init().catch((e) => console.error("[stressful] options init failed", e));

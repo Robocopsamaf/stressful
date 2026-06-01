@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 from analyzer import AnalyzedSentence, Analyzer
 
-app = FastAPI(title="Stressful Russian Analyzer", version="0.1.0")
+app = FastAPI(title="Stressful Analyzer", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -29,11 +29,12 @@ def get_analyzer() -> Analyzer:
 
 @app.on_event("startup")
 def _warm_up() -> None:
-    get_analyzer()
+    get_analyzer().warm("ru")
 
 
 class AnalyzeRequest(BaseModel):
     sentences: List[str]
+    source: str = "ru"
 
 
 class AnalyzeResponse(BaseModel):
@@ -48,7 +49,11 @@ def health() -> dict:
 @app.post("/analyze", response_model=AnalyzeResponse)
 def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
     analyzer = get_analyzer()
-    return AnalyzeResponse(sentences=analyzer.analyze_many(req.sentences))
+    try:
+        sentences = analyzer.analyze_many(req.sentences, req.source)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return AnalyzeResponse(sentences=sentences)
 
 
 class TranslateRequest(BaseModel):

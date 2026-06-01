@@ -1,11 +1,16 @@
-# Backend — Stressful Russian Analyzer
+# Backend — Stressful Analyzer
 
-Local FastAPI server that runs SpaCy (`ru_core_news_sm`) and ruaccent (tiny mode). The Firefox extension sends batches of Russian sentences and receives per-token stress marks, lemma, POS, morphology, and a CSS color class.
+Local FastAPI server. Two source languages today:
+
+- **Russian** — SpaCy `ru_core_news_sm` + ruaccent (tiny mode).
+- **Ukrainian** — SpaCy `uk_core_news_sm` + `ukrainian-word-stress` (lang-uk, dictionary-based).
+
+The extension sends batches of sentences (with the detected source language) and receives per-token stress marks, lemma, POS, morphology, and a CSS color class.
 
 ## Requirements
 
 - Python 3.9 or newer (3.9 works; 3.10+ also fine — pin `ruaccent==1.5.8.3` if you stay on 3.9, since newer ruaccent wheels require 3.10+).
-- ~1 GB of disk space for the SpaCy model + ruaccent's first-run downloads.
+- ~2 GB of disk space (SpaCy ru + uk models, ruaccent first-run downloads, Stanza data for `ukrainian-word-stress`).
 
 ## One-time setup
 
@@ -16,9 +21,13 @@ source .venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
 python -m spacy download ru_core_news_sm
+python -m spacy download uk_core_news_sm
+# Warm ukrainian-word-stress: first call downloads ~500MB of Stanza data
+# into ~/stanza_resources. Doing it now avoids a slow first /analyze.
+python -c "from ukrainian_word_stress import Stressifier; Stressifier()('привіт')"
 ```
 
-The first POST to `/analyze` triggers the ruaccent tiny model download (handful of MB) into the user cache directory.
+The first POST to `/analyze` for Russian triggers the ruaccent tiny model download (handful of MB) into the user cache directory.
 
 ## Run
 
@@ -33,7 +42,7 @@ Default port `8765`. Override with extra args, e.g. `./run.sh --port 9000`.
 ## Endpoints
 
 - `GET /health` → `{"ok": true}`
-- `POST /analyze` — request body `{ "sentences": ["..."] }`, response `{ "sentences": [{ "text": "...", "tokens": [...] }] }`.
+- `POST /analyze` — request body `{ "sentences": ["..."], "source": "ru" }` (source defaults to `ru`; `uk` also supported), response `{ "sentences": [{ "text": "...", "tokens": [...] }] }`.
 - `POST /translate` — request body `{ "texts": ["..."], "target": "sv", "source": "ru" }` (source defaults to `ru`), response `{ "translations": ["..."] }`. Backed by `deep-translator`'s `GoogleTranslator` (Google Translate web). Used as a fallback by the extension when YouTube's `tlang` auto-translate returns HTTP 429.
 
 Each token:
@@ -55,28 +64,37 @@ Each token:
 ## Smoke test
 
 ```bash
+# Russian
 curl -s -X POST http://localhost:8765/analyze \
   -H 'Content-Type: application/json' \
-  -d '{"sentences":["Я иду в большой магазин."]}' | jq
+  -d '{"sentences":["Я иду в большой магазин."],"source":"ru"}' | jq
+
+# Ukrainian
+curl -s -X POST http://localhost:8765/analyze \
+  -H 'Content-Type: application/json' \
+  -d '{"sentences":["Я йду до великого магазину."],"source":"uk"}' | jq
 ```
 
-Expect every Russian word to have `accented` containing a `U+0301` combining acute after the stressed vowel.
+Expect every Russian/Ukrainian word to have `accented` containing a `U+0301` combining acute after the stressed vowel.
 
 ## Caching
 
-Sentences are memoized in an in-process LRU (`maxsize=4096`). Repeated playback of the same video re-uses cached analyses — no duplicate work. `/translate` keeps a separate in-process cache keyed by `(source, target, text)` (cap 16k entries).
+Sentences are memoized in an in-process dict keyed by `(source_lang, sentence)` (cap 8k entries). Repeated playback of the same video re-uses cached analyses — no duplicate work. `/translate` keeps a separate in-process cache keyed by `(source, target, text)` (cap 16k entries).
 
 ## Tuning
 
 `backend/analyzer.py`:
 
-- `Analyzer.__init__` loads `omograph_model_size="tiny"` and `tiny_mode=True`. Bump to `"turbo"` / `tiny_mode=False` for slower but more accurate homograph disambiguation.
+- `_build_ru_pipeline` loads ruaccent with `omograph_model_size="tiny"` and `tiny_mode=True`. Bump to `"turbo"` / `tiny_mode=False` for slower but more accurate homograph disambiguation.
+- `_build_uk_pipeline` uses `Stressifier(on_ambiguity="all")` so homographs get every plausible stress marked. Switch to `"first"` or `"skip"` if you prefer fewer marks.
 - `POS_COLOR` maps SpaCy POS tags to the extension's CSS classes — edit to add categories (e.g. `PART`, `INTJ`).
+- `SUPPORTED_LANGS` lists the source languages the API accepts.
 
 ## Troubleshooting
 
 - **`ruaccent==1.5.10.4 not found`** — that version requires Python 3.10+. Stay on `1.5.8.3` on Python 3.9 (already pinned in `requirements.txt`).
-- **`OSError: [E050] Can't find model 'ru_core_news_sm'`** — run `python -m spacy download ru_core_news_sm`.
+- **`OSError: [E050] Can't find model 'ru_core_news_sm'`** — run `python -m spacy download ru_core_news_sm`. Same for `uk_core_news_sm`.
+- **First `/analyze` with `source=uk` is very slow / hangs** — `ukrainian-word-stress` is downloading ~500MB of Stanza data on first use. Run the warm-up command from the one-time setup section instead.
 - **Port already in use** — pass `--port <N>` to `run.sh` and update the extension's Backend URL in the options page.
 - **Ruaccent first request slow** — the tiny model is downloading. Subsequent requests are fast (sub-100 ms per cached sentence).
 - **Stress marks missing (every `accented` equals `surface`)** — usually means `transformers>=5` is installed; ruaccent's ONNX models require the legacy tokenizer contract (`token_type_ids` in the default output). `requirements.txt` pins `transformers<5`; `analyzer.py` also monkey-patches `put_accent` / `predict_stress_usage` to inject zero `token_type_ids` as a safety net. Reinstall with `pip install -r requirements.txt` if you see this.

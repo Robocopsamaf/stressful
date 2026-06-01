@@ -19,7 +19,7 @@ async function rebuild(): Promise<HTMLDivElement> {
   header.className = "sr-panel-header";
   const title = document.createElement("span");
   title.className = "sr-panel-title";
-  title.textContent = "Stressful Russian";
+  title.textContent = "Stressful";
   const close = document.createElement("button");
   close.type = "button";
   close.className = "sr-panel-close";
@@ -55,8 +55,8 @@ export async function mountSettingsPanel() {
   gear = document.createElement("button");
   gear.id = "sr-gear";
   gear.type = "button";
-  gear.title = "Stressful Russian settings";
-  gear.setAttribute("aria-label", "Stressful Russian settings");
+  gear.title = "Stressful settings";
+  gear.setAttribute("aria-label", "Stressful settings");
   gear.textContent = "⚙";
   gear.addEventListener("click", () => toggle());
   document.body.appendChild(gear);

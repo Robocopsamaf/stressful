@@ -5,9 +5,10 @@
   function keyFromUrl(rawUrl) {
     try {
       const u = new URL(rawUrl, location.origin);
+      const v = u.searchParams.get("v") || "";
       const lang = u.searchParams.get("lang") || "";
       const tlang = u.searchParams.get("tlang") || "";
-      return `${lang}|${tlang}`;
+      return `${v}|${lang}|${tlang}`;
     } catch {
       return null;
     }
@@ -88,7 +89,10 @@
     const u = new URL(baseUrl, location.origin);
     u.searchParams.set("tlang", tlang);
     const url = u.toString();
-    const delays = [0, 1500, 4000, 9000];
+    // Tight retry budget: blocking the source-cues response on a slow YT
+    // tlang round-trip is the biggest time-to-first-paint cost. Extension
+    // always has a backend /translate fallback for 429 / empty / failure.
+    const delays = [0, 800];
     let lastStatus = 0;
     for (let i = 0; i < delays.length; i++) {
       if (delays[i]) await new Promise((r) => setTimeout(r, delays[i]));
@@ -114,17 +118,17 @@
     if (ev.source !== window) return;
     const d = ev.data;
     if (!d || d.type !== "sr-captions-req") return;
-    const { id, lang, tlang, timeoutMs } = d;
-    console.log("[sr-bridge] req", { id, lang, tlang });
+    const { id, videoId, lang, tlang, timeoutMs } = d;
+    console.log("[sr-bridge] req", { id, videoId, lang, tlang });
 
-    const ruEntry = await waitFor(`${lang}|`, timeoutMs ?? 120000);
-    const ru = ruEntry ? ruEntry.body : "";
+    const srcEntry = await waitFor(`${videoId || ""}|${lang}|`, timeoutMs ?? 120000);
+    const src = srcEntry ? srcEntry.body : "";
 
     let tr = "";
-    if (tlang && tlang !== lang && ruEntry && ruEntry.url) {
-      tr = await fetchTranslated(ruEntry.url, tlang);
+    if (tlang && tlang !== lang && srcEntry && srcEntry.url) {
+      tr = await fetchTranslated(srcEntry.url, tlang);
     }
 
-    window.postMessage({ type: "sr-captions-resp", id, ru, tr }, "*");
+    window.postMessage({ type: "sr-captions-resp", id, src, tr }, "*");
   });
 })();
