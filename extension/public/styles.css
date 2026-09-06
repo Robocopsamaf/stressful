@@ -35,12 +35,6 @@
   font-weight: 500;
 }
 
-.sr-tr {
-  font-size: 20px;
-  color: #ddd;
-  font-style: italic;
-}
-
 .sr-tok {
   display: inline;
 }
@@ -81,11 +75,23 @@
 
 .sr-tt-header {
   font-weight: 600;
+  font-size: 15px;
+}
+
+.sr-tt-translation {
+  color: #9ad29a;
+  font-size: 14px;
   margin-bottom: 4px;
 }
 
-.sr-tt-body {
+.sr-tt-meta {
   color: #cfcfcf;
+  font-size: 12px;
+  margin-bottom: 2px;
+}
+
+.sr-tt-body {
+  color: #9aa0a6;
   font-size: 12px;
 }
 

@@ -5,9 +5,13 @@
   function keyFromUrl(rawUrl) {
     try {
       const u = new URL(rawUrl, location.origin);
+      // Include the video id so cached captions from a previous video (this
+      // MAIN-world script survives SPA navigation) can never satisfy a request
+      // for the new video.
+      const v = u.searchParams.get("v") || "";
       const lang = u.searchParams.get("lang") || "";
       const tlang = u.searchParams.get("tlang") || "";
-      return `${lang}|${tlang}`;
+      return `${v}|${lang}|${tlang}`;
     } catch {
       return null;
     }
@@ -84,47 +88,16 @@
     });
   }
 
-  async function fetchTranslated(baseUrl, tlang) {
-    const u = new URL(baseUrl, location.origin);
-    u.searchParams.set("tlang", tlang);
-    const url = u.toString();
-    const delays = [0, 1500, 4000, 9000];
-    let lastStatus = 0;
-    for (let i = 0; i < delays.length; i++) {
-      if (delays[i]) await new Promise((r) => setTimeout(r, delays[i]));
-      try {
-        const resp = await origFetch(url, { credentials: "include" });
-        const body = await resp.text();
-        console.log("[sr-bridge] translation fetch", { tlang, attempt: i + 1, status: resp.status, bytes: body.length });
-        lastStatus = resp.status;
-        if (resp.status === 200 && body && (body.trimStart().startsWith("{") || body.trimStart().startsWith("<?xml") || body.includes("<text"))) {
-          return body;
-        }
-        if (resp.status !== 429) return "";
-      } catch (e) {
-        console.warn("[sr-bridge] translation fetch failed", e);
-        return "";
-      }
-    }
-    console.warn("[sr-bridge] translation gave up", { tlang, lastStatus });
-    return "";
-  }
-
   window.addEventListener("message", async (ev) => {
     if (ev.source !== window) return;
     const d = ev.data;
     if (!d || d.type !== "sr-captions-req") return;
-    const { id, lang, tlang, timeoutMs } = d;
-    console.log("[sr-bridge] req", { id, lang, tlang });
+    const { id, videoId, lang, timeoutMs } = d;
+    console.log("[sr-bridge] req", { id, videoId, lang });
 
-    const ruEntry = await waitFor(`${lang}|`, timeoutMs ?? 120000);
+    const ruEntry = await waitFor(`${videoId || ""}|${lang}|`, timeoutMs ?? 120000);
     const ru = ruEntry ? ruEntry.body : "";
 
-    let tr = "";
-    if (tlang && tlang !== lang && ruEntry && ruEntry.url) {
-      tr = await fetchTranslated(ruEntry.url, tlang);
-    }
-
-    window.postMessage({ type: "sr-captions-resp", id, ru, tr }, "*");
+    window.postMessage({ type: "sr-captions-resp", id, ru }, "*");
   });
 })();

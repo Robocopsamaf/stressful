@@ -62,9 +62,9 @@ After editing TypeScript or any file under `extension/public/`, run `npm run bui
 2. Extension loaded.
 3. Open a YouTube video that has a Russian caption track.
 4. Click YouTube's **CC** button (the bottom-right of the player). If the auto-picked track isn't Russian, open the gear icon → **Subtitles/CC** → pick the Russian track.
-5. The native caption window is hidden by injected CSS; the extension's overlay appears just above the controls — Russian on top (with stress marks like `приве́т` and POS-coloring), translated text below.
-6. Hover any Russian word → tooltip showing lemma + morph fields (Case, Number, Gender, Tense, Person, Aspect, Mood, etc).
-7. Open extension options to change target language. Reload the YouTube tab for the new language to take effect.
+5. The native caption window is hidden by injected CSS; the extension's overlay appears just above the controls — a single Russian line with stress marks like `приве́т` and POS-coloring. There is no second, translated line.
+6. Hover any Russian word → tooltip showing the accented word, its gloss, its dictionary form + part of speech, and its morph fields (Case, Number, Gender, Tense, Person, Aspect, Mood, etc). The gloss is usually already cached, because each cue's words are prefetched as it appears; on a miss it briefly reads `Fetching translation...`.
+7. Open extension options to change the hover translation language. It takes effect on the next hover — no tab reload needed, since captions don't have to be re-fetched.
 
 If the backend is unreachable a red banner appears in the top-right with instructions; the Russian line still renders (without stress/colors) so the rest of the page is not broken.
 
@@ -74,8 +74,8 @@ YouTube now requires a session-bound `pot` (proof-of-origin token) on `api/timed
 
 Two content scripts run on `youtube.com/*`:
 
-- `page-fetch.js` runs at `document_start` with `world: "MAIN"`. It monkey-patches `window.fetch` and `XMLHttpRequest`. When the patched code sees a request matching `/api/timedtext`, it clones the response, reads the body, and stores `{ body, url }` keyed by `lang|tlang`.
-- `content.js` (ISOLATED world) parses `ytInitialPlayerResponse` to confirm a Russian track exists, then `postMessage`s a `sr-captions-req` to the bridge. The bridge waits for the native request to land (user-triggered CC click), then for the translation, builds it by appending `&tlang=<target>` to the captured Russian URL (preserving the `pot`), and fetches that directly.
+- `page-fetch.js` runs at `document_start` with `world: "MAIN"`. It monkey-patches `window.fetch` and `XMLHttpRequest`. When the patched code sees a request matching `/api/timedtext`, it clones the response, reads the body, and stores `{ body, url }` keyed by `videoId|lang|tlang`. The video id is part of the key because this MAIN-world script survives YouTube's SPA navigation, so without it a caption body cached for the previous video could satisfy a request for the new one.
+- `content.js` (ISOLATED world) parses `ytInitialPlayerResponse` to confirm a Russian track exists, then `postMessage`s a `sr-captions-req` to the bridge. The bridge waits for the native request to land (user-triggered CC click) and replies with the captured body. Only the Russian track is ever requested — there is no second, translated caption track to fetch.
 
 This is also why the user must enable CC manually — we can't sign URLs ourselves.
 
@@ -93,9 +93,11 @@ extension/
 │   ├── background.ts        service worker, settings storage + message router
 │   ├── content.ts           entrypoint on youtube.com, drives setup/teardown across SPA navigations
 │   ├── captions.ts          findRussianTrack(), requestCues() bridge wrapper, JSON3/XML parsing
-│   ├── api.ts               POST /analyze, in-memory cache by sentence text
-│   ├── overlay.ts           dual-line overlay, rAF sync to video.currentTime, prefetch next N cues
-│   ├── tooltip.ts           shared morph tooltip on hover
+│   ├── api.ts               POST /analyze + POST /translate, in-memory caches + in-flight dedupe
+│   ├── overlay.ts           single-line Russian overlay, rAF sync to video.currentTime, prefetch next N cues
+│   ├── tooltip.ts           hover tooltip: word + async translation + lemma·POS + morphology
+│   ├── settings-form.ts     shared settings form used by the options page and in-page panel
+│   ├── settings-panel.ts    in-page gear button + settings panel
 │   ├── options.ts           options page logic
 │   └── popup.ts             toolbar popup (enable toggle)
 └── public/
@@ -105,17 +107,44 @@ extension/
     └── styles.css           overlay, POS colors, tooltip, hides native YT caption window
 
 backend/
-├── app.py                   FastAPI app, /health + /analyze
+├── app.py                   FastAPI app, /health + /analyze + /translate
+├── glossary.py              English Wiktionary lookup, POS-matched word senses
 ├── analyzer.py              SpaCy + ruaccent wrapper, alignment, lru_cache
 ├── requirements.txt         fastapi, uvicorn, pydantic, spacy, ruaccent
 ├── run.sh                   uvicorn convenience launcher
 └── README.md
 ```
 
-## 6. Known limitations
+## 6. Word glosses
+
+Hovering sends the token's **lemma** and its SpaCy POS to `POST /translate`. Three rules, each
+of which cost some measuring to arrive at:
+
+- **Gloss the lemma, not the surface form.** Russian inflection is heavy and an isolated
+  inflected form gets mis-sensed.
+- **Prefer Wiktionary, filtered by part of speech.** `glossary.py` asks the English Wiktionary
+  for the word and keeps the senses whose part of speech matches SpaCy's tag. This is why `и`
+  glosses as "and" rather than "the tenth letter of the Russian alphabet". English only — the
+  REST definition endpoint answers HTTP 501 on the other language wikis. Anything it can't
+  serve falls through to `deep-translator`'s `GoogleTranslator`.
+- **Keep machine-translation requests sequential.** Google's free endpoint is rate-limited by
+  IP. Two faster-looking shapes were measured and are worse: joining the texts with newlines
+  into one request makes the `/m` endpoint return no result container at all, and issuing them
+  concurrently blanks about a third of a batch. Sequential single words are fine — 26 in a row
+  measured clean. `_translate_chunk` in `app.py` carries this note.
+
+Latency is hidden by prefetching: as each cue renders, `overlay.ts` hands `content.ts` the
+lemma+POS of every word in it, so by the time the pointer lands the gloss is usually cached.
+`api.ts` dedupes in-flight requests, so a hover landing mid-prefetch joins the pending request
+instead of issuing a second one. Caches are keyed by `(source, target, pos, word)` on both
+sides — the same word under two readings is two different answers — and empty results are
+never cached.
+
+## 7. Known limitations
 
 - YouTube DOM is not contractual. `#movie_player`, `ytInitialPlayerResponse`, and the subtitles button class can change without notice.
 - Auto-generated (ASR) Russian captions have no punctuation, weakening SpaCy's analysis.
 - ruaccent's tiny model picks one default reading for homographs; rare ambiguous stresses may be wrong.
 - The extension's overlay is anchored to `#movie_player`. Fullscreen mode works; some experimental YouTube layouts may not.
-- Translation track is only available if YouTube's auto-translate supports the target language for that video.
+- Wiktionary glosses are English-only. Other target languages fall back to machine translation, which returns a single context-free sense (`в` on its own comes back as "V").
+- A word with no Wiktionary entry, or a reading SpaCy and Wiktionary disagree on, falls back to machine translation too. Google's free endpoint is rate-limited by IP, so a gloss can occasionally come back blank; blanks are never cached, so the next hover retries.

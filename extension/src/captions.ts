@@ -116,27 +116,22 @@ function parseBody(body: string): Cue[] {
   }
 }
 
-export interface RequestedCues {
-  ru: Cue[];
-  tr: Cue[];
-}
-
-export function requestCues(lang: string, tlang: string, timeoutMs = 120000): Promise<RequestedCues> {
+export function requestCues(videoId: string, lang: string, timeoutMs = 120000): Promise<Cue[]> {
   return new Promise((resolve) => {
     const id = `sr-${Date.now()}-${Math.random()}`;
     const timer = window.setTimeout(() => {
       window.removeEventListener("message", handler);
-      resolve({ ru: [], tr: [] });
+      resolve([]);
     }, timeoutMs + 5000);
     function handler(ev: MessageEvent) {
-      const d = ev.data as { type?: string; id?: string; ru?: string; tr?: string };
+      const d = ev.data as { type?: string; id?: string; ru?: string };
       if (!d || d.type !== "sr-captions-resp" || d.id !== id) return;
       window.clearTimeout(timer);
       window.removeEventListener("message", handler);
-      console.log("[stressful-russian] captions resp", { ruBytes: (d.ru ?? "").length, trBytes: (d.tr ?? "").length });
-      resolve({ ru: parseBody(d.ru ?? ""), tr: parseBody(d.tr ?? "") });
+      console.log("[stressful-russian] captions resp", { ruBytes: (d.ru ?? "").length });
+      resolve(parseBody(d.ru ?? ""));
     }
     window.addEventListener("message", handler);
-    window.postMessage({ type: "sr-captions-req", id, lang, tlang, timeoutMs }, "*");
+    window.postMessage({ type: "sr-captions-req", id, videoId, lang, timeoutMs }, "*");
   });
 }

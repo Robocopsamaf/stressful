@@ -4,9 +4,11 @@ export interface OverlayDeps {
   root: HTMLElement;
   video: HTMLVideoElement;
   russianCues: Cue[];
-  translatedCues: Cue[];
   settings: Settings;
   analyze: (texts: string[]) => Promise<AnalyzedSentence[]>;
+  // Warm the translation cache for a cue's words as it appears on screen, so a
+  // hover is a cache hit instead of a round trip to Google.
+  prefetchWords?: (words: { text: string; pos: string }[]) => void;
   onAnalyzeError?: (err: unknown) => void;
   onAnalyzeOk?: () => void;
 }
@@ -38,20 +40,6 @@ function findCueIndex(cues: Cue[], t: number): number {
   return best;
 }
 
-function findTranslatedFor(cues: Cue[], target: Cue): Cue | null {
-  const mid = target.start + target.dur / 2;
-  let lo = 0;
-  let hi = cues.length - 1;
-  while (lo <= hi) {
-    const m = (lo + hi) >>> 1;
-    const c = cues[m];
-    if (c.start <= mid && c.start + Math.max(c.dur, 0.1) >= mid) return c;
-    if (c.start < mid) lo = m + 1;
-    else hi = m - 1;
-  }
-  return null;
-}
-
 function tokenToSpan(tok: Token, settings: Settings): HTMLElement {
   const span = document.createElement("span");
   const klass = ["sr-tok"];
@@ -60,6 +48,10 @@ function tokenToSpan(tok: Token, settings: Settings): HTMLElement {
   span.textContent = settings.showStress ? tok.accented : tok.surface;
   if (settings.showTooltips && tok.is_word) {
     span.dataset.morph = JSON.stringify(tok.morph);
+    // Unaccented form: what the tooltip compares against the lemma, so a word
+    // that is already in its dictionary form doesn't get a redundant lemma row
+    // just because the rendered text carries a stress mark.
+    span.dataset.surface = tok.surface;
     span.dataset.lemma = tok.lemma;
     span.dataset.pos = tok.pos;
   }
@@ -84,7 +76,7 @@ function renderAnalyzed(target: HTMLElement, sentence: AnalyzedSentence, setting
 }
 
 export function mountOverlay(deps: OverlayDeps): Overlay {
-  const { root, video, russianCues, translatedCues, settings, analyze, onAnalyzeError, onAnalyzeOk } = deps;
+  const { root, video, russianCues, settings, analyze, prefetchWords, onAnalyzeError, onAnalyzeOk } = deps;
 
   const wrap = document.createElement("div");
   wrap.id = "sr-overlay";
@@ -92,10 +84,7 @@ export function mountOverlay(deps: OverlayDeps): Overlay {
   wrap.style.top = `${pos}%`;
   const ruLine = document.createElement("div");
   ruLine.className = "sr-line sr-ru";
-  const trLine = document.createElement("div");
-  trLine.className = "sr-line sr-tr";
   wrap.appendChild(ruLine);
-  wrap.appendChild(trLine);
   root.appendChild(wrap);
 
   const analyzed = new Map<number, AnalyzedSentence>();
@@ -122,55 +111,71 @@ export function mountOverlay(deps: OverlayDeps): Overlay {
     }
   }
 
+  // The lemmas the tooltip would ask for if the user hovered each word of this
+  // cue. Deduped here; api.ts dedupes again across cues.
+  function prefetchFor(sentence: AnalyzedSentence) {
+    if (!prefetchWords || !settings.showTooltips) return;
+    const seen = new Set<string>();
+    const words: { text: string; pos: string }[] = [];
+    for (const tok of sentence.tokens) {
+      if (!tok.is_word) continue;
+      const w = (tok.lemma || tok.surface).trim();
+      // Keyed by word+POS to match the gloss cache: the same lemma under two
+      // readings is two different entries.
+      const key = `${w}|${tok.pos}`;
+      if (!w || seen.has(key)) continue;
+      seen.add(key);
+      words.push({ text: w, pos: tok.pos });
+    }
+    if (words.length > 0) prefetchWords(words);
+  }
+
   let currentIdx = -2;
-  let lastTrText = "";
   let raf = 0;
   let stopped = false;
 
   function loop() {
     if (stopped) return;
     raf = requestAnimationFrame(loop);
+
+    // During ads YouTube plays the ad in the SAME <video> element, so
+    // currentTime resets toward 0 and we'd wrongly show the video's first cue.
+    // #movie_player carries the `ad-showing` class while an ad plays.
+    if (root.classList.contains("ad-showing")) {
+      if (ruLine.textContent) ruLine.textContent = "";
+      currentIdx = -2; // force a re-render once the ad ends
+      return;
+    }
+
     const t = video.currentTime;
     const idx = findCueIndex(russianCues, t);
 
-    if (idx !== currentIdx) {
-      currentIdx = idx;
-      if (idx < 0) {
-        ruLine.textContent = "";
-        trLine.textContent = "";
-        lastTrText = "";
-        return;
-      }
-      const cue = russianCues[idx];
-      const analyzedSentence = analyzed.get(idx);
-      if (analyzedSentence) {
-        renderAnalyzed(ruLine, analyzedSentence, settings);
-      } else {
-        ruLine.textContent = cue.text;
-        ensureAnalyzed([idx]).then(() => {
-          if (currentIdx === idx) {
-            const s = analyzed.get(idx);
-            if (s) renderAnalyzed(ruLine, s, settings);
+    if (idx === currentIdx) return;
+    currentIdx = idx;
+    if (idx < 0) {
+      ruLine.textContent = "";
+      return;
+    }
+    const cue = russianCues[idx];
+    const analyzedSentence = analyzed.get(idx);
+    if (analyzedSentence) {
+      renderAnalyzed(ruLine, analyzedSentence, settings);
+      prefetchFor(analyzedSentence);
+    } else {
+      ruLine.textContent = cue.text;
+      ensureAnalyzed([idx]).then(() => {
+        if (currentIdx === idx) {
+          const s = analyzed.get(idx);
+          if (s) {
+            renderAnalyzed(ruLine, s, settings);
+            prefetchFor(s);
           }
-        });
-      }
-      const prefetch: number[] = [];
-      for (let k = 1; k <= PREFETCH_AHEAD; k++) prefetch.push(idx + k);
-      ensureAnalyzed(prefetch);
+        }
+      });
     }
-
-    // Update translation each frame so async backfill becomes visible mid-cue.
-    if (currentIdx >= 0 && translatedCues.length > 0) {
-      const tcue = findTranslatedFor(translatedCues, russianCues[currentIdx]);
-      const next = tcue ? tcue.text : "";
-      if (next !== lastTrText) {
-        trLine.textContent = next;
-        lastTrText = next;
-      }
-    } else if (lastTrText !== "") {
-      trLine.textContent = "";
-      lastTrText = "";
-    }
+    const prefetch: number[] = [];
+    for (let k = 1; k <= PREFETCH_AHEAD; k++) prefetch.push(idx + k);
+    ensureAnalyzed(prefetch);
   }
 
   raf = requestAnimationFrame(loop);

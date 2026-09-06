@@ -3,7 +3,6 @@ import { Settings } from "./types";
 import { findRussianTrack, requestCues } from "./captions";
 import { mountOverlay, Overlay } from "./overlay";
 import { analyzeBatch, primeSettings, translateBatch } from "./api";
-import { Cue } from "./types";
 import { mountTooltip } from "./tooltip";
 import { mountSettingsPanel } from "./settings-panel";
 
@@ -13,6 +12,8 @@ const STORAGE_KEY = "settings";
 
 let overlay: Overlay | null = null;
 let lastVideoId: string | null = null;
+// Latest settings, used by the hover tooltip's on-demand word translation.
+let activeSettings: Settings | null = null;
 
 async function getSettings(): Promise<Settings> {
   const resp = (await browser.runtime.sendMessage({ type: "getSettings" })) as Settings;
@@ -26,6 +27,33 @@ function videoIdFromUrl(): string | null {
   } catch {
     return null;
   }
+}
+
+// Translate a single hovered word into the target language. Cheap and cached in
+// api.ts — only words the user actually hovers are ever requested.
+async function translateWord(word: string, pos: string): Promise<string> {
+  const s = activeSettings;
+  if (!s) return "";
+  const target = s.targetLang;
+  if (!word || !target || target === "ru") return "";
+  primeSettings(s);
+  const [tr] = await translateBatch([word], target, "ru", [pos]);
+  return tr ?? "";
+}
+
+// Warm the cache for every word of the cue now on screen. Fired as each cue
+// renders, so by the time the pointer lands on a word its gloss is already in
+// api.ts's cache. One request per cue, not one per hover — fewer round trips
+// than lazy hovering, which also keeps Google from throttling us.
+function prefetchWords(words: { text: string; pos: string }[]) {
+  const s = activeSettings;
+  if (!s || !s.showTooltips) return;
+  const target = s.targetLang;
+  if (!target || target === "ru") return;
+  primeSettings(s);
+  void translateBatch(words.map((w) => w.text), target, "ru", words.map((w) => w.pos)).catch(() => {
+    /* best effort — the hover path retries and reports for real */
+  });
 }
 
 async function setup(settings: Settings, videoId: string) {
@@ -44,16 +72,15 @@ async function setup(settings: Settings, videoId: string) {
 
   showBanner("Enable YouTube CC and pick the Russian track to activate Stressful Russian.");
 
-  const tlang = settings.targetLang && settings.targetLang !== "ru" ? settings.targetLang : "";
-  const { ru: russianCues, tr: ytTranslatedCues } = await requestCues("ru", tlang);
+  // Russian captions only — translation happens per word on hover, so there's no
+  // second time-aligned line to keep in sync. Keyed by videoId so a cached
+  // caption from the previous video can't leak in after SPA navigation.
+  const russianCues = await requestCues(videoId, "ru");
   if (russianCues.length === 0) {
     showBanner("No Russian captions captured. Click YouTube CC button, select Russian track.");
     return;
   }
   hideBanner();
-
-  const translatedCues: Cue[] = ytTranslatedCues.slice();
-  const needsBackendTranslate = tlang && translatedCues.length === 0;
 
   const video = document.querySelector<HTMLVideoElement>("video.html5-main-video");
   const playerRoot = document.querySelector<HTMLElement>("#movie_player");
@@ -66,36 +93,12 @@ async function setup(settings: Settings, videoId: string) {
     root: playerRoot,
     video,
     russianCues,
-    translatedCues,
     settings,
     analyze: analyzeBatch,
+    prefetchWords,
     onAnalyzeError: () => showBanner(`Cannot reach analyzer at ${settings.backendUrl}. Start the backend (see backend/README.md).`),
     onAnalyzeOk: () => hideBanner(),
   });
-
-  if (needsBackendTranslate) {
-    void backfillTranslations(russianCues, translatedCues, tlang);
-  }
-}
-
-async function backfillTranslations(ru: Cue[], target: Cue[], tlang: string) {
-  console.log("[stressful-russian] backend translate starting", { cues: ru.length, tlang });
-  const CHUNK = 50;
-  for (let start = 0; start < ru.length; start += CHUNK) {
-    const slice = ru.slice(start, start + CHUNK);
-    try {
-      const tr = await translateBatch(slice.map((c) => c.text), tlang, "ru");
-      slice.forEach((c, i) => {
-        target.push({ start: c.start, dur: c.dur, text: tr[i] ?? "" });
-      });
-      target.sort((a, b) => a.start - b.start);
-    } catch (e) {
-      console.warn("[stressful-russian] backend translate chunk failed", e);
-      showBanner(`Translation unavailable: ${(e as Error).message}`);
-      return;
-    }
-  }
-  console.log("[stressful-russian] backend translate done");
 }
 
 let banner: HTMLDivElement | null = null;
@@ -123,6 +126,7 @@ async function tick() {
   if (id === lastVideoId) return;
   lastVideoId = id;
   const settings = await getSettings();
+  activeSettings = settings;
   console.log("[stressful-russian] settings=", settings);
   setup(settings, id).catch((e) => console.error("[stressful-russian] setup failed", e));
 }
@@ -142,9 +146,11 @@ browser.storage.onChanged.addListener((changes, area) => {
   if (area !== "sync" || !changes[STORAGE_KEY]) return;
   const newSettings = (changes[STORAGE_KEY].newValue ?? {}) as Settings;
   const prev = (changes[STORAGE_KEY].oldValue ?? {}) as Settings;
+  activeSettings = newSettings;
   if (overlay) overlay.applySettings(newSettings);
+  // targetLang is deliberately absent: it only affects the hover gloss, which
+  // reads activeSettings live, so there's no need to re-fetch captions.
   const heavyChanged =
-    newSettings.targetLang !== prev.targetLang ||
     newSettings.backendUrl !== prev.backendUrl ||
     newSettings.enabled !== prev.enabled;
   if (heavyChanged) {
@@ -153,7 +159,7 @@ browser.storage.onChanged.addListener((changes, area) => {
   }
 });
 
-mountTooltip();
+mountTooltip(translateWord);
 mountSettingsPanel();
 watchUrlChanges();
 tick();

@@ -1,21 +1,29 @@
 # Stressful Russian
 
-A Firefox + Chrome extension that overlays YouTube videos with dual subtitles:
+A Firefox + Chrome extension that overlays YouTube videos with a **single** Russian subtitle
+line: stressed vowels marked (e.g. `приве́т`) and color-coded by part of speech.
 
-- **Top line:** Russian text with stressed vowels marked (e.g. `приве́т`) and color-coded by part of speech.
-- **Bottom line:** translation in a language you choose. Tries YouTube's auto-translate first; if YouTube rate-limits (HTTP 429) or returns empty, falls back to the local backend's `/translate` endpoint (Google Translate via `deep-translator`).
+**Hover any word** to get its meaning plus full grammatical information — dictionary form,
+part of speech, and morphology (case, number, gender, tense, person, aspect, mood).
 
-Hovering any Russian word shows its lemma, part of speech, and morphology (case, number, gender, tense, person, aspect, mood).
+Meanings come from the English Wiktionary, filtered to the part of speech SpaCy assigned the
+word in that sentence. So `дело` as a noun gives "affair, matter, concern; work, business",
+and the same spelling read as a verb gives the past-tense form instead — the sense you're
+actually looking at, rather than whichever one a translation engine happened to pick.
+
+There is no second, translated subtitle line by design. Translation happens on demand, one
+word at a time, when you hover — so the Russian stays in front of you instead of your eye
+dropping to the English.
 
 ## Architecture
 
 ```
 ┌───────────────────┐   timedtext (intercepted)   ┌────────────────────┐
-│  YouTube watch    │ ──────────────────────────► │  Firefox extension │
-│  page (Firefox)   │ ◄── tlang (or 429 → skip)   │  (TypeScript, MV3) │
+│  YouTube watch    │ ──────────────────────────► │  Browser extension │
+│  page             │                             │  (TypeScript, MV3) │
 └───────────────────┘                             └─────────┬──────────┘
-                                                            │ POST /analyze
-                                                            │ POST /translate (fallback)
+                                                            │ POST /analyze   (per cue)
+                                                            │ POST /translate (per hovered word)
                                                             ▼
                                               ┌──────────────────────────┐
                                               │ Local FastAPI backend    │
@@ -25,7 +33,14 @@ Hovering any Russian word shows its lemma, part of speech, and morphology (case,
                                               └──────────────────────────┘
 ```
 
-Browsers cannot run SpaCy or ruaccent, so a small Python backend (FastAPI) runs locally. The extension fetches YouTube's Russian caption track, tries YouTube's `tlang` for the translated track, and falls back to the backend's `/translate` (Google Translate via `deep-translator`) when YouTube rate-limits. Sentences are batched to `/analyze` for per-token POS + morphology + stress, and rendered in the overlay.
+Browsers cannot run SpaCy or ruaccent, so a small Python backend (FastAPI) runs locally. The
+extension captures YouTube's Russian caption track and batches its cues to `/analyze` for
+per-token POS + morphology + stress, which it renders as the color-coded overlay. When you
+hover a word, its **lemma** and part of speech go to `/translate` for a gloss (cached, so each
+word is fetched at most once). The words of each cue are also prefetched as it appears, so a
+hover is normally a cache hit rather than a round trip. Glosses come from the English
+Wiktionary; a non-English target language or a word with no entry falls back to Google
+Translate via `deep-translator`.
 
 ## Repository layout
 
@@ -65,7 +80,7 @@ stressful-russian/
    - **Firefox** — `about:debugging#/runtime/this-firefox` → **Load Temporary Add-on…** → pick `extension/dist-firefox/manifest.json`
    - **Chrome** (or Edge / Brave) — `chrome://extensions` → enable **Developer mode** → **Load unpacked** → pick `extension/dist-chrome/`
 
-4. Open a YouTube video that has a Russian caption track. Click YouTube's **CC** button and select the Russian track (gear icon → Subtitles/CC → Russian). The extension intercepts the caption fetch, hides the native caption window, and renders the dual overlay.
+4. Open a YouTube video that has a Russian caption track. Click YouTube's **CC** button and select the Russian track (gear icon → Subtitles/CC → Russian). The extension intercepts the caption fetch, hides the native caption window, renders the color-coded Russian line, and you can hover any word for its translation and grammar.
 
 Full walkthrough in [DEVELOPMENT.md](DEVELOPMENT.md).
 
@@ -73,13 +88,13 @@ Full walkthrough in [DEVELOPMENT.md](DEVELOPMENT.md).
 
 Right-click the extension's toolbar icon → **Manage Extension → Options**:
 
-- **Translated language** — what the bottom subtitle line shows. Tries YouTube auto-translate; falls back to backend `/translate` (Google Translate) if YouTube returns 429 / empty.
+- **Hover translation language** — the language hovered words are glossed into. English gets POS-matched Wiktionary senses; other languages fall back to Google Translate.
 - **Backend URL** — defaults to `http://localhost:8765`.
 - Toggles for stress marks, POS colors, and hover tooltips.
 
 ## Why must the user click YouTube's CC button?
 
-YouTube's caption endpoint now requires a session-bound proof-of-origin token (`pot`) the extension cannot generate. The native player produces a valid signed URL only when the user enables CC through its own UI. Our extension monkey-patches `fetch`/`XMLHttpRequest` in the page's MAIN world so it can read the response body once the native player has triggered the request. Translation tracks are then derived from the captured URL by appending the `tlang` parameter.
+YouTube's caption endpoint now requires a session-bound proof-of-origin token (`pot`) the extension cannot generate. The native player produces a valid signed URL only when the user enables CC through its own UI. Our extension monkey-patches `fetch`/`XMLHttpRequest` in the page's MAIN world so it can read the response body once the native player has triggered the request.
 
 ## Status
 
@@ -88,4 +103,9 @@ Proof of concept. Personal use only — not on AMO or the Chrome Web Store. Test
 ## Stack
 
 - TypeScript, esbuild, `webextension-polyfill`, web-ext (extension)
-- Python 3.9+, FastAPI, SpaCy `ru_core_news_sm`, ruaccent `1.5.8.3` (tiny mode), `deep-translator` (Google Translate fallback), `transformers<5` (ruaccent's ONNX models need the legacy tokenizer contract)
+- Python 3.9+, FastAPI, SpaCy `ru_core_news_sm`, ruaccent `1.5.8.3` (tiny mode), English Wiktionary REST API (POS-matched word senses), `deep-translator` (Google Translate fallback), `transformers<5` (ruaccent's ONNX models need the legacy tokenizer contract)
+
+## Credits
+
+Word senses come from the [English Wiktionary](https://en.wiktionary.org), whose content is
+licensed [CC BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0/).

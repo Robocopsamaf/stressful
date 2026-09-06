@@ -40,12 +40,12 @@ Two content scripts inject on `https://www.youtube.com/*`:
 
 | Script | World | When | Purpose |
 | --- | --- | --- | --- |
-| `page-fetch.js` | MAIN | `document_start` | Monkey-patches `fetch` + `XMLHttpRequest`. Captures bodies of `api/timedtext` requests (the only way to get a valid `pot`-signed caption URL). Listens for `sr-captions-req` postMessages and fetches translations by appending `tlang` to a captured URL, retrying up to 4 times on HTTP 429. |
-| `content.js` | ISOLATED | `document_idle` | Reads `ytInitialPlayerResponse` to verify a Russian track exists, asks the bridge for cues, mounts the overlay, syncs to `video.currentTime`, calls the backend per cue, renders tokens and the morphology tooltip. |
+| `page-fetch.js` | MAIN | `document_start` | Monkey-patches `fetch` + `XMLHttpRequest`. Captures bodies of `api/timedtext` requests (the only way to get a valid `pot`-signed caption URL). Listens for `sr-captions-req` postMessages and replies with the captured body, keyed by video id so a caption cached from a previous video can't leak in after SPA navigation. |
+| `content.js` | ISOLATED | `document_idle` | Reads `ytInitialPlayerResponse` to verify a Russian track exists, asks the bridge for cues, mounts the overlay, syncs to `video.currentTime`, calls the backend per cue, renders tokens and the hover tooltip (translation + morphology). |
 
 `styles.css` adds the overlay styles, POS colors, tooltip box, and a rule hiding `.ytp-caption-window-container` so the native caption window doesn't overlap ours.
 
-The toolbar popup is `public/popup.html` (enable toggle + link to options); the options page is `public/options.html` (target language, backend URL, display toggles). Settings are stored via `browser.storage.sync`.
+The toolbar popup is `public/popup.html` (enable toggle + link to options); the options page is `public/options.html` (hover translation language, backend URL, display toggles). Settings are stored via `browser.storage.sync`.
 
 ## Source layout
 
@@ -55,9 +55,9 @@ src/
 ├── background.ts   service worker, settings storage + message router
 ├── content.ts      entry on youtube.com; SPA-aware URL watcher; mounts/destroys overlay
 ├── captions.ts     findRussianTrack(), requestCues() (postMessage bridge wrapper), JSON3/XML parsing
-├── api.ts          POST /analyze + POST /translate, in-memory caches by text
-├── overlay.ts      dual-line overlay, rAF sync, prefetch next 5 cues
-├── tooltip.ts      shared morph tooltip on hover
+├── api.ts          POST /analyze + POST /translate, caches keyed by word+POS, in-flight dedupe
+├── overlay.ts      single-line Russian overlay, rAF sync, prefetch next 30 cues
+├── tooltip.ts      hover tooltip: word + async translation + lemma·POS + morphology
 ├── options.ts      options page UI
 └── popup.ts        toolbar popup UI
 
@@ -74,15 +74,20 @@ public/
 2. Open a YouTube video with a Russian caption track.
 3. A red banner appears top-right: *"Enable YouTube CC and pick the Russian track to activate Stressful Russian."*
 4. Click YouTube's **CC** button. If multiple subtitle tracks exist, open the gear icon → **Subtitles/CC** and select Russian.
-5. The bridge captures the caption response (and, if a target language is configured, fetches the auto-translated version using the same signed URL). The banner disappears; the overlay renders.
-6. If YouTube's `tlang` returns HTTP 429 for every retry (common on residential IPs that have done a lot of auto-translate requests recently), the overlay mounts immediately with the Russian line only and `content.ts` calls the backend's `POST /translate` in the background, chunked 50 cues at a time, filling the bottom line progressively.
+5. The bridge captures the caption response. The banner disappears; the single Russian line renders, stress-marked and color-coded by part of speech.
+6. Hovering a word shows the rendered (accented) form, its gloss, its dictionary form and part of speech, and its morphology. `tooltip.ts` calls the `translateWord` callback injected by `content.ts`, passing the token's **lemma** and its SpaCy **POS** to `POST /translate` — the POS picks the right Wiktionary sense, so it's part of the cache key too.
+7. The gloss is normally already there, because `overlay.ts` prefetches every word of a cue as that cue renders. `Fetching translation...` only appears on a genuine miss. `api.ts` caches results and dedupes in-flight requests, so a hover landing mid-prefetch joins the pending request rather than issuing a second one, and a response that arrives after the pointer has moved on is discarded.
 
 ## Common edits
 
-- **Add a target language to the options dropdown**: edit `LANGS` in `src/options.ts`.
+- **Add a target language to the options dropdown**: edit `LANGS` in `src/types.ts`.
 - **Change overlay colors**: edit the `.sr-verb`, `.sr-noun`, `.sr-adj`, `.sr-pron`, `.sr-num`, `.sr-adv` rules in `public/styles.css`.
-- **Change overlay position**: tweak `#sr-overlay { bottom: 12%; ... }` in `public/styles.css`.
+- **Change overlay position**: it's driven by the `overlayPosition` setting, applied as an inline `top` percentage in `src/overlay.ts`; the base rule is `#sr-overlay` in `public/styles.css`.
+- **Restyle the hover box**: edit `.sr-tt-header`, `.sr-tt-translation`, `.sr-tt-meta`, `.sr-tt-body` in `public/styles.css`.
 - **Increase caption-wait timeout**: change `timeoutMs` in `requestCues()` in `src/captions.ts` (also propagated to `page-fetch.js`).
+- **Translate the surface form instead of the lemma**: change the `word` chosen in `format()` in `src/tooltip.ts`.
+- **Change the "Fetching translation..." placeholder**: same function, where `.sr-tt-translation` is first filled.
+- **Stop prefetching whole cues**: drop the `prefetchWords` dep passed to `mountOverlay` in `src/content.ts`; hovers then fetch lazily, one word at a time.
 
 ## Known limitations
 

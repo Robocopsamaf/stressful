@@ -34,7 +34,11 @@ Default port `8765`. Override with extra args, e.g. `./run.sh --port 9000`.
 
 - `GET /health` → `{"ok": true}`
 - `POST /analyze` — request body `{ "sentences": ["..."] }`, response `{ "sentences": [{ "text": "...", "tokens": [...] }] }`.
-- `POST /translate` — request body `{ "texts": ["..."], "target": "sv", "source": "ru" }` (source defaults to `ru`), response `{ "translations": ["..."] }`. Backed by `deep-translator`'s `GoogleTranslator` (Google Translate web). Used as a fallback by the extension when YouTube's `tlang` auto-translate returns HTTP 429.
+- `POST /translate` — request body `{ "texts": ["..."], "target": "en", "source": "ru", "pos": ["NOUN"] }` (source defaults to `ru`; `pos` is optional and parallel to `texts`), response `{ "translations": ["..."] }`. Serves the extension's hover glosses, one word per hover plus a prefetch of each cue's words.
+
+  Two sources, in order. When the target is English and a `pos` is supplied, `glossary.py` looks the word up on the **English Wiktionary** and returns the senses whose part of speech matches — so `дело` as a `NOUN` gives "affair, matter, concern; work, business" and not the past-tense verb reading. Anything else — a non-English target, a word with no entry, a multi-word string — falls through to `deep-translator`'s `GoogleTranslator`.
+
+  Only the English Wiktionary is used: the REST definition endpoint answers HTTP 501 on the other language wikis.
 
 Each token:
 
@@ -64,7 +68,7 @@ Expect every Russian word to have `accented` containing a `U+0301` combining acu
 
 ## Caching
 
-Sentences are memoized in an in-process LRU (`maxsize=4096`). Repeated playback of the same video re-uses cached analyses — no duplicate work. `/translate` keeps a separate in-process cache keyed by `(source, target, text)` (cap 16k entries).
+Sentences are memoized in an in-process LRU (`maxsize=4096`). Repeated playback of the same video re-uses cached analyses — no duplicate work. `/translate` keeps a separate in-process cache keyed by `(source, target, pos, text)` (cap 16k entries) — `pos` is part of the key because the same word glossed under two parts of speech is two different answers. Empty results are never cached, so a word blanked by a rate limit is retried on the next request instead of being stuck.
 
 ## Tuning
 
@@ -80,4 +84,5 @@ Sentences are memoized in an in-process LRU (`maxsize=4096`). Repeated playback 
 - **Port already in use** — pass `--port <N>` to `run.sh` and update the extension's Backend URL in the options page.
 - **Ruaccent first request slow** — the tiny model is downloading. Subsequent requests are fast (sub-100 ms per cached sentence).
 - **Stress marks missing (every `accented` equals `surface`)** — usually means `transformers>=5` is installed; ruaccent's ONNX models require the legacy tokenizer contract (`token_type_ids` in the default output). `requirements.txt` pins `transformers<5`; `analyzer.py` also monkey-patches `put_accent` / `predict_stress_usage` to inject zero `token_type_ids` as a safety net. Reinstall with `pip install -r requirements.txt` if you see this.
-- **`/translate` returns empty strings** — `deep-translator` scrapes Google Translate web and occasionally hits its own rate limit. Failures are logged with `[translate] chunk failed: …`. Retry after a few minutes, or swap to `LibreTranslate`.
+- **`/translate` returns empty strings** — only reachable on the machine-translation fallback path: `deep-translator` scrapes Google Translate web and is rate-limited by IP. Failures are logged with `[translate] failed for …`. Requests are deliberately sequential and retried with backoff; two faster-looking shapes were measured and are worse, both noted in `_translate_chunk`. Joining the texts with newlines into one request makes Google's `/m` endpoint return no result container at all, and issuing the requests concurrently trips the rate limiter and blanks about a third of a batch. If it persists, wait a few minutes or swap in `LibreTranslate`.
+- **Glosses look like machine translation rather than dictionary senses** — the Wiktionary path only runs for an English target with a `pos` supplied. Check the request actually carries `pos`, and look for `[gloss] …` lines in the log.

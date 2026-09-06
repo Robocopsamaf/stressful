@@ -37,7 +37,7 @@ export function buildSettingsForm(initial: Settings): BuiltForm {
   form.appendChild(enabledLabel);
 
   const langWrap = el("label", { class: "sr-panel-field" });
-  langWrap.appendChild(el("span", {}, "Translated language"));
+  langWrap.appendChild(el("span", {}, "Hover translation language"));
   const langSel = el("select", { name: "targetLang" }) as HTMLSelectElement;
   for (const { code, label } of LANGS) {
     langSel.appendChild(el("option", { value: code }, `${label} (${code})`));
