@@ -45,6 +45,8 @@ stressful/
 
 1. **Backend** (one terminal):
 
+   **macOS / Linux**
+
    ```bash
    cd backend
    python3 -m venv .venv && source .venv/bin/activate
@@ -55,7 +57,20 @@ stressful/
    ./run.sh                       # http://127.0.0.1:8765
    ```
 
-2. **Extension** (another terminal):
+   **Windows (PowerShell)** — run it natively, not under WSL. See [Windows notes](#windows-notes).
+
+   ```powershell
+   cd backend
+   py -3.12 -m venv .venv
+   .\.venv\Scripts\Activate.ps1
+   pip install -r requirements.txt
+   python -m spacy download ru_core_news_sm
+   python -m spacy download uk_core_news_sm
+   python -c "from ukrainian_word_stress import Stressifier; Stressifier()('привіт')"   # warms ~500MB Stanza data
+   python -m uvicorn app:app --host 127.0.0.1 --port 8765
+   ```
+
+2. **Extension** (another terminal) — identical on every platform:
 
    ```bash
    cd extension
@@ -71,6 +86,43 @@ stressful/
 4. Open a YouTube video that has a Russian or Ukrainian caption track. Click YouTube's **CC** button and select that track (gear icon → Subtitles/CC → Russian / Ukrainian). The extension intercepts the caption fetch, hides the native caption window, and renders the dual overlay.
 
 Full walkthrough in [DEVELOPMENT.md](DEVELOPMENT.md).
+
+## Windows notes
+
+Run everything **natively on Windows** — don't use WSL. The browser is on Windows, and the
+extension talks to `http://localhost:8765`; putting the backend inside WSL turns that into a
+cross-boundary call that needs `--host 0.0.0.0` and often the WSL IP in the extension's
+Backend URL. Nothing in the backend is Unix-specific, so WSL buys nothing here.
+
+Differences from the macOS / Linux instructions, all of them in step 1:
+
+- **Use Python 3.12, not 3.13.** `requirements.txt` pins `spacy==3.7.5`, which has no 3.13
+  wheels. `py -3.12 -m venv .venv` picks the right one if you have several installed.
+- **Activate is `.venv\Scripts\Activate.ps1`**, not `source .venv/bin/activate`. If PowerShell
+  refuses with a script-execution error, either allow it for that terminal only —
+  `Set-ExecutionPolicy -Scope Process RemoteSigned` — or use `cmd` and run
+  `.venv\Scripts\activate.bat`.
+- **Start the server with `python -m uvicorn app:app --host 127.0.0.1 --port 8765`.** `run.sh`
+  is a bash script and won't run in PowerShell; the module form does the same thing and needs
+  no extra tooling.
+
+Everything else is unchanged. `npm install`, `npm run build`, `npm run lint` and `npm run
+watch` are all cross-platform, and loading the built extension works exactly as described
+above.
+
+If the `ukrainian_word_stress` warm-up line errors on the Cyrillic argument, you're on
+Windows PowerShell 5.1, which doesn't pass non-ASCII arguments through cleanly. Use
+PowerShell 7 (`pwsh`), or run the two statements inside an interactive `python` prompt
+instead. Russian works regardless — this step only warms the Ukrainian stress data.
+
+Two rough edges worth knowing before you file a bug:
+
+- `npm run dev` does **not** work on Windows — it shells out to `npx`, which is `npx.cmd`
+  there. Use `npm run watch` and reload the extension by hand.
+- `npm run package:chrome` needs the Unix `zip` command. Packaging only; the normal
+  build/load flow doesn't touch it.
+
+Not yet verified on Windows — if you hit something not listed here, that's worth reporting.
 
 ## Configuration
 
