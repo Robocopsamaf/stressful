@@ -32,21 +32,24 @@ function readPlayerResponse(): PlayerResponse | null {
   return null;
 }
 
-export async function findRussianTrack(): Promise<CaptionTrackInfo | null> {
+export async function findSourceTrack(prefs: readonly string[]): Promise<CaptionTrackInfo | null> {
   for (let i = 0; i < 20; i++) {
     const pr = readPlayerResponse();
     const tracks = pr?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
     if (tracks && tracks.length > 0) {
-      const ru = tracks.filter((t) => t.languageCode === "ru");
-      if (ru.length === 0) return null;
-      const manual = ru.find((t) => t.kind !== "asr");
-      const pick = manual ?? ru[0];
-      return {
-        baseUrl: pick.baseUrl,
-        languageCode: pick.languageCode,
-        kind: pick.kind,
-        name: pick.name?.simpleText,
-      };
+      for (const lang of prefs) {
+        const matching = tracks.filter((t) => t.languageCode === lang);
+        if (matching.length === 0) continue;
+        const manual = matching.find((t) => t.kind !== "asr");
+        const pick = manual ?? matching[0];
+        return {
+          baseUrl: pick.baseUrl,
+          languageCode: pick.languageCode,
+          kind: pick.kind,
+          name: pick.name?.simpleText,
+        };
+      }
+      return null;
     }
     await new Promise((r) => setTimeout(r, 250));
   }
@@ -111,7 +114,7 @@ function parseBody(body: string): Cue[] {
   try {
     return body.trimStart().startsWith("<") ? parseXml(body) : parseJson3(body);
   } catch (e) {
-    console.warn("[stressful-russian] caption parse failed", e);
+    console.warn("[stressful] caption parse failed", e);
     return [];
   }
 }
@@ -124,12 +127,12 @@ export function requestCues(videoId: string, lang: string, timeoutMs = 120000): 
       resolve([]);
     }, timeoutMs + 5000);
     function handler(ev: MessageEvent) {
-      const d = ev.data as { type?: string; id?: string; ru?: string };
+      const d = ev.data as { type?: string; id?: string; src?: string };
       if (!d || d.type !== "sr-captions-resp" || d.id !== id) return;
       window.clearTimeout(timer);
       window.removeEventListener("message", handler);
-      console.log("[stressful-russian] captions resp", { ruBytes: (d.ru ?? "").length });
-      resolve(parseBody(d.ru ?? ""));
+      console.log("[stressful] captions resp", { srcBytes: (d.src ?? "").length });
+      resolve(parseBody(d.src ?? ""));
     }
     window.addEventListener("message", handler);
     window.postMessage({ type: "sr-captions-req", id, videoId, lang, timeoutMs }, "*");

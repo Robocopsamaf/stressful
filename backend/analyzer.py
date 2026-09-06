@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import re
-import unicodedata
-from functools import lru_cache
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel
 
@@ -89,6 +87,8 @@ POS_COLOR = {
     "ADV": "adv",
 }
 
+SUPPORTED_LANGS = ("ru", "uk")
+
 
 class Token(BaseModel):
     surface: str
@@ -110,7 +110,7 @@ def _strip_accent(s: str) -> str:
 
 
 def _split_accented(accented: str) -> List[str]:
-    """Naively split ruaccent output into word-like pieces aligned to plain tokens."""
+    """Naively split accentizer output into word-like pieces aligned to plain tokens."""
     out: List[str] = []
     buf: List[str] = []
     for ch in accented:
@@ -127,35 +127,80 @@ def _split_accented(accented: str) -> List[str]:
     return out
 
 
-class Analyzer:
-    def __init__(self) -> None:
-        import spacy
-        from ruaccent import RUAccent
+class _LangPipeline:
+    def __init__(self, nlp, accent: Callable[[str], str]) -> None:
+        self.nlp = nlp
+        self.accent = accent
 
-        _patch_ruaccent_token_type_ids()
-        self.nlp = spacy.load("ru_core_news_sm")
-        self.accentizer = RUAccent()
-        self.accentizer.load(
-            omograph_model_size="tiny",
-            use_dictionary=True,
-            tiny_mode=True,
-        )
 
-    def _accent(self, text: str) -> str:
+def _build_ru_pipeline() -> _LangPipeline:
+    import spacy
+    from ruaccent import RUAccent
+
+    _patch_ruaccent_token_type_ids()
+    nlp = spacy.load("ru_core_news_sm")
+    accentizer = RUAccent()
+    accentizer.load(
+        omograph_model_size="tiny",
+        use_dictionary=True,
+        tiny_mode=True,
+    )
+
+    def accent(text: str) -> str:
         try:
-            raw = self.accentizer.process_all(text)
+            raw = accentizer.process_all(text)
         except Exception as e:
-            print(f"[analyzer] accentizer failed: {type(e).__name__}: {e}", flush=True)
+            print(f"[analyzer ru] accentizer failed: {type(e).__name__}: {e}", flush=True)
             return text
         # ruaccent tiny_mode marks stress with "+" before the stressed vowel.
         # Convert to U+0301 combining acute after the vowel so the frontend can
         # render it as a real stress mark.
         return _PLUS_MARK_RE.sub(lambda m: m.group(1) + ACUTE, raw)
 
-    def analyze(self, sentence: str) -> AnalyzedSentence:
-        return _analyze_cached(self, sentence)
+    return _LangPipeline(nlp, accent)
 
-    def analyze_many(self, sentences: List[str]) -> List[AnalyzedSentence]:
+
+def _build_uk_pipeline() -> _LangPipeline:
+    import spacy
+    from ukrainian_word_stress import Stressifier
+
+    nlp = spacy.load("uk_core_news_sm")
+    stressify = Stressifier(stress_symbol=ACUTE, on_ambiguity="all")
+
+    def accent(text: str) -> str:
+        try:
+            return stressify(text)
+        except Exception as e:
+            print(f"[analyzer uk] stressifier failed: {type(e).__name__}: {e}", flush=True)
+            return text
+
+    return _LangPipeline(nlp, accent)
+
+
+_PIPELINE_BUILDERS: Dict[str, Callable[[], _LangPipeline]] = {
+    "ru": _build_ru_pipeline,
+    "uk": _build_uk_pipeline,
+}
+
+
+class Analyzer:
+    def __init__(self) -> None:
+        self._pipelines: Dict[str, _LangPipeline] = {}
+
+    def _pipeline(self, lang: str) -> _LangPipeline:
+        if lang not in _PIPELINE_BUILDERS:
+            raise ValueError(f"unsupported source language: {lang}")
+        if lang not in self._pipelines:
+            self._pipelines[lang] = _PIPELINE_BUILDERS[lang]()
+        return self._pipelines[lang]
+
+    def warm(self, lang: str) -> None:
+        self._pipeline(lang)
+
+    def analyze(self, sentence: str, lang: str = "ru") -> AnalyzedSentence:
+        return self.analyze_many([sentence], lang)[0]
+
+    def analyze_many(self, sentences: List[str], lang: str = "ru") -> List[AnalyzedSentence]:
         # Use cached results for any sentence we've seen; group the misses and
         # send them through SpaCy as one document so the parser has context
         # across cue boundaries (matters a lot for ASR captions which have no
@@ -163,37 +208,33 @@ class Analyzer:
         results: List[Optional[AnalyzedSentence]] = [None] * len(sentences)
         missing: List[int] = []
         for i, s in enumerate(sentences):
-            cached = _CACHE.get(s)
+            cached = _CACHE.get((lang, s))
             if cached is not None:
                 results[i] = cached
             else:
                 missing.append(i)
         if missing:
             batch = [sentences[i] for i in missing]
-            fresh = _analyze_batch_impl(self, batch)
+            fresh = _analyze_batch_impl(self._pipeline(lang), batch)
             for k, idx in enumerate(missing):
-                _CACHE[sentences[idx]] = fresh[k]
+                _store((lang, sentences[idx]), fresh[k])
                 results[idx] = fresh[k]
         return [r for r in results if r is not None]
 
 
 # Simple dict cache; we manage eviction ourselves to keep batching consistent.
-_CACHE: Dict[str, AnalyzedSentence] = {}
+_CacheKey = Tuple[str, str]
+_CACHE: Dict[_CacheKey, AnalyzedSentence] = {}
 _CACHE_LIMIT = 8192
 
 
-def _store(text: str, value: AnalyzedSentence) -> None:
+def _store(key: _CacheKey, value: AnalyzedSentence) -> None:
     if len(_CACHE) > _CACHE_LIMIT:
         # Drop oldest ~10% (insertion-order). Cheap and good enough.
         drop = len(_CACHE) // 10
-        for key in list(_CACHE.keys())[:drop]:
-            _CACHE.pop(key, None)
-    _CACHE[text] = value
-
-
-@lru_cache(maxsize=4096)
-def _analyze_cached(analyzer: Analyzer, sentence: str) -> AnalyzedSentence:
-    return analyzer.analyze_many([sentence])[0]
+        for k in list(_CACHE.keys())[:drop]:
+            _CACHE.pop(k, None)
+    _CACHE[key] = value
 
 
 # Sentinel separator: rare unicode char that SpaCy tokenises as a single PUNCT
@@ -202,14 +243,14 @@ _SEP = " ‖ "
 _SEP_TOKEN = "‖"
 
 
-def _analyze_batch_impl(analyzer: Analyzer, sentences: List[str]) -> List[AnalyzedSentence]:
+def _analyze_batch_impl(pipeline: _LangPipeline, sentences: List[str]) -> List[AnalyzedSentence]:
     if not sentences:
         return []
 
-    # Run ruaccent per sentence and build a surface→accented map from the union
-    # of all outputs. (Joining first would be ~equivalent but per-sentence keeps
-    # the accentizer's behaviour predictable.)
-    accented_full_list = [analyzer._accent(s) for s in sentences]
+    # Run accentizer per sentence and build a surface→accented map from the
+    # union of all outputs. (Joining first would be ~equivalent but per-sentence
+    # keeps the accentizer's behaviour predictable.)
+    accented_full_list = [pipeline.accent(s) for s in sentences]
     accented_by_surface: Dict[str, str] = {}
     for accented_full in accented_full_list:
         for piece in _split_accented(accented_full):
@@ -218,7 +259,7 @@ def _analyze_batch_impl(analyzer: Analyzer, sentences: List[str]) -> List[Analyz
                 accented_by_surface[plain] = piece
 
     joined = _SEP.join(sentences)
-    doc = analyzer.nlp(joined)
+    doc = pipeline.nlp(joined)
 
     chunks: List[List[Token]] = [[]]
     for tok in doc:
@@ -244,7 +285,7 @@ def _analyze_batch_impl(analyzer: Analyzer, sentences: List[str]) -> List[Analyz
     # Ensure we have exactly one chunk per input. If SpaCy ever merges or splits
     # an unexpected number of separators, fall back to per-sentence analysis.
     if len(chunks) != len(sentences):
-        return [_analyze_single(analyzer, s, accented_full_list[i]) for i, s in enumerate(sentences)]
+        return [_analyze_single(pipeline, s, accented_full_list[i]) for i, s in enumerate(sentences)]
 
     return [
         AnalyzedSentence(text=accented_full_list[i], tokens=chunks[i])
@@ -252,13 +293,13 @@ def _analyze_batch_impl(analyzer: Analyzer, sentences: List[str]) -> List[Analyz
     ]
 
 
-def _analyze_single(analyzer: Analyzer, sentence: str, accented_full: str) -> AnalyzedSentence:
+def _analyze_single(pipeline: _LangPipeline, sentence: str, accented_full: str) -> AnalyzedSentence:
     accented_by_surface: Dict[str, str] = {}
     for piece in _split_accented(accented_full):
         plain = _strip_accent(piece)
         if plain and plain not in accented_by_surface:
             accented_by_surface[plain] = piece
-    doc = analyzer.nlp(sentence)
+    doc = pipeline.nlp(sentence)
     tokens: List[Token] = []
     for tok in doc:
         surface = tok.text

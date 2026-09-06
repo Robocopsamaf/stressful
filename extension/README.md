@@ -1,4 +1,4 @@
-# Extension — Stressful Russian
+# Extension — Stressful
 
 Firefox MV3 extension, written in TypeScript and bundled with esbuild. Pairs with the local FastAPI backend in `../backend/`.
 
@@ -40,8 +40,8 @@ Two content scripts inject on `https://www.youtube.com/*`:
 
 | Script | World | When | Purpose |
 | --- | --- | --- | --- |
-| `page-fetch.js` | MAIN | `document_start` | Monkey-patches `fetch` + `XMLHttpRequest`. Captures bodies of `api/timedtext` requests (the only way to get a valid `pot`-signed caption URL). Listens for `sr-captions-req` postMessages and replies with the captured body, keyed by video id so a caption cached from a previous video can't leak in after SPA navigation. |
-| `content.js` | ISOLATED | `document_idle` | Reads `ytInitialPlayerResponse` to verify a Russian track exists, asks the bridge for cues, mounts the overlay, syncs to `video.currentTime`, calls the backend per cue, renders tokens and the hover tooltip (translation + morphology). |
+| `page-fetch.js` | MAIN | `document_start` | Monkey-patches `fetch` + `XMLHttpRequest`. Captures bodies of `api/timedtext` requests (the only way to get a valid `pot`-signed caption URL), keyed by `videoId\|lang\|tlang` so SPA navigation between videos picks up fresh cues instead of replaying the previous video's track. Listens for `sr-captions-req` postMessages and replies with the captured body. No translated track is ever fetched — translation is per hovered word. |
+| `content.js` | ISOLATED | `document_idle` | Reads `ytInitialPlayerResponse` to find a supported source-language track (ru or uk), asks the bridge for cues, mounts the overlay, syncs to `video.currentTime`, calls the backend per cue, renders tokens and the hover tooltip (gloss + morphology). |
 
 `styles.css` adds the overlay styles, POS colors, tooltip box, and a rule hiding `.ytp-caption-window-container` so the native caption window doesn't overlap ours.
 
@@ -54,10 +54,10 @@ src/
 ├── types.ts        Settings, Cue, Token, AnalyzedSentence, RuntimeMessage
 ├── background.ts   service worker, settings storage + message router
 ├── content.ts      entry on youtube.com; SPA-aware URL watcher; mounts/destroys overlay
-├── captions.ts     findRussianTrack(), requestCues() (postMessage bridge wrapper), JSON3/XML parsing
-├── api.ts          POST /analyze + POST /translate, caches keyed by word+POS, in-flight dedupe
-├── overlay.ts      single-line Russian overlay, rAF sync, prefetch next 30 cues
-├── tooltip.ts      hover tooltip: word + async translation + lemma·POS + morphology
+├── captions.ts     findSourceTrack(prefs), requestCues() (postMessage bridge wrapper), JSON3/XML parsing
+├── api.ts          POST /analyze + POST /translate, caches keyed by (source, text) and word+POS, in-flight dedupe
+├── overlay.ts      single-line source overlay, rAF sync, prefetch next 30 cues
+├── tooltip.ts      hover tooltip: word + async gloss + lemma·POS + morphology
 ├── options.ts      options page UI
 └── popup.ts        toolbar popup UI
 
@@ -71,10 +71,10 @@ public/
 ## User flow
 
 1. Backend is running on `http://localhost:8765`.
-2. Open a YouTube video with a Russian caption track.
-3. A red banner appears top-right: *"Enable YouTube CC and pick the Russian track to activate Stressful Russian."*
-4. Click YouTube's **CC** button. If multiple subtitle tracks exist, open the gear icon → **Subtitles/CC** and select Russian.
-5. The bridge captures the caption response. The banner disappears; the single Russian line renders, stress-marked and color-coded by part of speech.
+2. Open a YouTube video with a Russian or Ukrainian caption track. The extension auto-detects (ru preferred, then uk).
+3. A red banner appears top-right: *"Enable YouTube CC and pick the Russian/Ukrainian track to activate Stressful."*
+4. Click YouTube's **CC** button. If multiple subtitle tracks exist, open the gear icon → **Subtitles/CC** and select the Russian or Ukrainian track.
+5. The bridge captures the caption response. The banner disappears; the single source line renders, stress-marked and color-coded by part of speech.
 6. Hovering a word shows the rendered (accented) form, its gloss, its dictionary form and part of speech, and its morphology. `tooltip.ts` calls the `translateWord` callback injected by `content.ts`, passing the token's **lemma** and its SpaCy **POS** to `POST /translate` — the POS picks the right Wiktionary sense, so it's part of the cache key too.
 7. The gloss is normally already there, because `overlay.ts` prefetches every word of a cue as that cue renders. `Fetching translation...` only appears on a genuine miss. `api.ts` caches results and dedupes in-flight requests, so a hover landing mid-prefetch joins the pending request rather than issuing a second one, and a response that arrives after the pointer has moved on is discarded.
 
@@ -91,11 +91,12 @@ public/
 
 ## Known limitations
 
-- Requires the user to enable native CC and pick the Russian track. We cannot generate `pot` tokens.
+- Requires the user to enable native CC and pick the Russian or Ukrainian track. We cannot generate `pot` tokens.
 - YouTube DOM selectors are not contractual. Most likely to break: `.ytp-subtitles-button`, `.ytp-caption-window-container`, `#movie_player`, `ytInitialPlayerResponse`.
-- ASR (auto-generated) Russian captions have no punctuation; SpaCy's parse is weaker on them.
+- ASR (auto-generated) captions have no punctuation; SpaCy's parse is weaker on them.
 - The overlay is anchored to the player container; fullscreen works. Mini-player / picture-in-picture has not been tested.
+- Belarusian is not supported (no official spaCy `be` pipeline, no off-the-shelf BE stress library). See `SUPPORTED_SOURCES` in `src/content.ts` for the seam.
 
 ## Tests
 
-There are no automated tests yet. The smoke test is "load it, open a Russian video, see if the overlay and tooltips behave."
+There are no automated tests yet. The smoke test is "load it, open a ru/uk video, see if the overlay and tooltips behave."

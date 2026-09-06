@@ -5,9 +5,6 @@
   function keyFromUrl(rawUrl) {
     try {
       const u = new URL(rawUrl, location.origin);
-      // Include the video id so cached captions from a previous video (this
-      // MAIN-world script survives SPA navigation) can never satisfy a request
-      // for the new video.
       const v = u.searchParams.get("v") || "";
       const lang = u.searchParams.get("lang") || "";
       const tlang = u.searchParams.get("tlang") || "";
@@ -95,9 +92,9 @@
     const { id, videoId, lang, timeoutMs } = d;
     console.log("[sr-bridge] req", { id, videoId, lang });
 
-    const ruEntry = await waitFor(`${videoId || ""}|${lang}|`, timeoutMs ?? 120000);
-    const ru = ruEntry ? ruEntry.body : "";
+    const srcEntry = await waitFor(`${videoId || ""}|${lang}|`, timeoutMs ?? 120000);
+    const src = srcEntry ? srcEntry.body : "";
 
-    window.postMessage({ type: "sr-captions-resp", id, ru }, "*");
+    window.postMessage({ type: "sr-captions-resp", id, src }, "*");
   });
 })();

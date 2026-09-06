@@ -94,11 +94,12 @@ export async function translateBatch(
   return out;
 }
 
-export async function analyzeBatch(texts: string[]): Promise<AnalyzedSentence[]> {
+export async function analyzeBatch(texts: string[], source = "ru"): Promise<AnalyzedSentence[]> {
+  const keyOf = (t: string) => `${source}|${t}`;
   const need: string[] = [];
   const indexMap: number[] = [];
   texts.forEach((t, i) => {
-    if (!cache.has(t)) {
+    if (!cache.has(keyOf(t))) {
       need.push(t);
       indexMap.push(i);
     }
@@ -107,11 +108,11 @@ export async function analyzeBatch(texts: string[]): Promise<AnalyzedSentence[]>
     const resp = await fetch(`${backendUrl}/analyze`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sentences: need }),
+      body: JSON.stringify({ sentences: need, source }),
     });
     if (!resp.ok) throw new Error(`analyze failed: ${resp.status}`);
     const data = (await resp.json()) as AnalyzeResponse;
-    data.sentences.forEach((s, k) => cache.set(need[k], s));
+    data.sentences.forEach((s, k) => cache.set(keyOf(need[k]), s));
   }
-  return texts.map((t) => cache.get(t)!);
+  return texts.map((t) => cache.get(keyOf(t))!);
 }

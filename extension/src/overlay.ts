@@ -104,7 +104,7 @@ export function mountOverlay(deps: OverlayDeps): Overlay {
       result.forEach((s, k) => analyzed.set(need[k].idx, s));
       onAnalyzeOk?.();
     } catch (e) {
-      console.warn("[stressful-russian] analyze failed", e);
+      console.warn("[stressful] analyze failed", e);
       onAnalyzeError?.(e);
     } finally {
       need.forEach((n) => pending.delete(n.idx));

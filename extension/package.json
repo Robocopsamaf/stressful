@@ -1,7 +1,7 @@
 {
-  "name": "stressful-russian",
+  "name": "stressful",
   "version": "0.1.0",
-  "description": "Firefox extension overlaying YouTube videos with Russian + translated dual subtitles, stress marks and morphology.",
+  "description": "Firefox extension overlaying YouTube videos with Russian/Ukrainian + translated dual subtitles, stress marks and morphology.",
   "private": true,
   "type": "module",
   "scripts": {
@@ -12,7 +12,7 @@
     "dev": "node build.mjs --target=firefox --watch --run",
     "lint": "tsc --noEmit",
     "package:firefox": "npm run build:firefox && web-ext build --source-dir=dist-firefox --artifacts-dir=web-ext-artifacts --overwrite-dest",
-    "package:chrome": "npm run build:chrome && cd dist-chrome && zip -r ../web-ext-artifacts/stressful-russian-chrome.zip ."
+    "package:chrome": "npm run build:chrome && cd dist-chrome && zip -r ../web-ext-artifacts/stressful-chrome.zip ."
   },
   "dependencies": {
     "webextension-polyfill": "^0.12.0"
