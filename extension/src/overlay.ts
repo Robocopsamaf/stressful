@@ -131,6 +131,18 @@ export function mountOverlay(deps: OverlayDeps): Overlay {
   function loop() {
     if (stopped) return;
     raf = requestAnimationFrame(loop);
+
+    // During ads YouTube plays the ad in the SAME <video> element, so
+    // currentTime resets toward 0 and we'd wrongly show the video's first cue.
+    // #movie_player carries the `ad-showing` class while an ad plays.
+    if (root.classList.contains("ad-showing")) {
+      if (ruLine.textContent) ruLine.textContent = "";
+      if (trLine.textContent) trLine.textContent = "";
+      lastTrText = "";
+      currentIdx = -2; // force a re-render once the ad ends
+      return;
+    }
+
     const t = video.currentTime;
     const idx = findCueIndex(russianCues, t);
 

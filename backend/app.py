@@ -114,7 +114,11 @@ def translate(req: TranslateRequest) -> TranslateResponse:
                 translated.extend([""] * len(piece))
         for idx, src, tr in zip(misses, miss_texts, translated):
             out[idx] = tr
-            _TRANSLATE_CACHE[(req.source, req.target, src)] = tr
+            # Only cache successful (non-empty) translations, so cues that came
+            # back blank from a rate-limit get retried on the next request
+            # rather than being permanently stuck empty.
+            if tr:
+                _TRANSLATE_CACHE[(req.source, req.target, src)] = tr
         if len(_TRANSLATE_CACHE) > _TRANSLATE_CACHE_LIMIT:
             drop = len(_TRANSLATE_CACHE) // 10
             for k in list(_TRANSLATE_CACHE.keys())[:drop]:

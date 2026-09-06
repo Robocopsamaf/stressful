@@ -39,7 +39,8 @@ export async function translateBatch(texts: string[], target: string, source = "
     const data = (await resp.json()) as TranslateResponse;
     data.translations.forEach((tr, k) => {
       const src = need[k];
-      translateCache.set(`${source}|${target}|${src}`, tr);
+      // Don't cache blanks (rate-limited / failed) so they get retried later.
+      if (tr) translateCache.set(`${source}|${target}|${src}`, tr);
       out[idx[k]] = tr;
     });
   }
