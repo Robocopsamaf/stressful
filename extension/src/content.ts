@@ -39,10 +39,16 @@ async function getSettings(): Promise<Settings> {
   return resp;
 }
 
+// /watch and the embedded player carry the id in `?v=`; /shorts/, /live/ and
+// the old /embed/ and /v/ forms carry it in the path.
+const PATH_VIDEO_ID = /^\/(?:shorts|live|embed|v)\/([A-Za-z0-9_-]{6,})/;
+
 function videoIdFromUrl(): string | null {
   try {
     const u = new URL(window.location.href);
-    return u.searchParams.get("v");
+    const v = u.searchParams.get("v");
+    if (v) return v;
+    return PATH_VIDEO_ID.exec(u.pathname)?.[1] ?? null;
   } catch {
     return null;
   }
@@ -93,7 +99,11 @@ async function setup(settings: Settings, videoId: string) {
   const needsBackendTranslate = tlang && translatedCues.length === 0;
 
   const video = document.querySelector<HTMLVideoElement>("video.html5-main-video");
-  const playerRoot = document.querySelector<HTMLElement>("#movie_player");
+  // Shorts mount their own player; #movie_player does not exist there, and
+  // without this the id we now parse out of /shorts/ URLs would go nowhere.
+  const playerRoot =
+    document.querySelector<HTMLElement>("#movie_player") ??
+    document.querySelector<HTMLElement>("#shorts-player");
   if (!video || !playerRoot) {
     console.warn("[stressful] cannot find video or player root");
     return;
