@@ -151,29 +151,42 @@ def _translate_one(source: str, target: str, text: str) -> str:
     return ""
 
 
-def _resolve_one(source: str, target: str, text: str, pos: str) -> str:
-    """A dictionary gloss when we can get one, machine translation otherwise."""
-    # Only single words have Wiktionary entries, and only when we know the
-    # reading to select; anything else goes straight to machine translation.
-    if pos and " " not in text.strip():
-        gloss = glossary.lookup(text, pos, source=source, target=target)
-        if gloss:
-            return gloss
-    return _translate_one(source, target, text)
+def _pos_at(pos: List[str], i: int) -> str:
+    return pos[i] if i < len(pos) else ""
 
 
 def _translate_chunk(texts: List[str], source: str, target: str, pos: List[str]) -> List[str]:
-    # Strictly sequential, one request per text. Two faster-looking shapes were
-    # measured and both are worse: joining the list with newlines into a single
-    # request makes Google's /m endpoint return no result container at all, and
-    # issuing the requests concurrently trips its rate limiter, which comes back
-    # as blank translations for a third of the batch. Spaced-out single requests
-    # answer in ~0.15s each and succeed. Each text retries on its own, so one
-    # word Google refuses can't blank or misalign the words around it.
-    return [
-        _resolve_one(source, target, t, pos[i] if i < len(pos) else "")
-        for i, t in enumerate(texts)
-    ]
+    """Dictionary glosses first, then machine translation for whatever is left.
+
+    The two halves want opposite shapes. Wiktionary is latency-bound — roughly
+    0.8s per uncached word — so its lookups overlap, and `glossary` caps how many
+    are actually in flight. Google is rate-bound, so its requests stay strictly
+    sequential: joining the list with newlines into a single request makes the
+    /m endpoint return no result container at all, and issuing them concurrently
+    comes back as blank translations for a third of the batch. Each text is also
+    handled on its own, so one word Google refuses can't blank or misalign the
+    words around it.
+    """
+    out: List[str] = [""] * len(texts)
+
+    # Only single words have Wiktionary entries, and only when we know the
+    # reading to select; anything else is machine translation's job.
+    idx = [i for i, t in enumerate(texts) if _pos_at(pos, i) and " " not in t.strip()]
+    if idx:
+        glosses = glossary.lookup_many(
+            [texts[i] for i in idx],
+            [_pos_at(pos, i) for i in idx],
+            source=source,
+            target=target,
+        )
+        for i, gloss in zip(idx, glosses):
+            if gloss:
+                out[i] = gloss
+
+    for i, text in enumerate(texts):
+        if not out[i]:
+            out[i] = _translate_one(source, target, text)
+    return out
 
 
 @app.post("/translate", response_model=TranslateResponse)

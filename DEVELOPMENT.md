@@ -144,10 +144,8 @@ backend/
 - `tooltip.ts` takes a synchronous `glossEnabled` predicate. Dual mode returns false, so the
   translation row is never created — the translated line already says it — and no per-word
   request is made. `prefetchWords` is gated the same way.
-- `prefetchWords` issues **one request per word**, not one for the cue. The backend answers a
-  batch strictly in order, so a single batched promise would make a hover on the first word
-  wait for the last word too; per-word requests let `api.ts` hand each hover the one promise it
-  needs, and its in-flight dedupe still stops the hover from asking twice.
+- `prefetchWords` sends the cue's words as one request, and `overlay.ts` warms `GLOSS_AHEAD`
+  cues past the one playing, so a word is normally glossed before its cue reaches the screen.
 - A mode change is a **heavy** settings change in the `storage.onChanged` listener: the overlay
   is torn down and `setup()` re-runs. That is why `applySettings` never has to add or remove the
   second line.
@@ -161,9 +159,32 @@ Three rules, each of which cost some measuring to arrive at:
   inflected form gets mis-sensed.
 - **Prefer Wiktionary, filtered by part of speech.** `glossary.py` asks the English Wiktionary
   for the word and keeps the senses whose part of speech matches SpaCy's tag. This is why `и`
-  glosses as "and" rather than "the tenth letter of the Russian alphabet". English only — the
-  REST definition endpoint answers HTTP 501 on the other language wikis. Anything it can't
-  serve falls through to `deep-translator`'s `GoogleTranslator`.
+  glosses as "and" rather than "the tenth letter of the Russian alphabet". English only.
+  Anything it can't serve falls through to `deep-translator`'s `GoogleTranslator`.
+- **Ask in batches, via the Action API, not the REST endpoint.** This is the single biggest
+  factor in how fast hover mode feels, and it took measuring to find. The pretty REST endpoint
+  (`/api/rest_v1/page/definition/<word>`) takes one word per request, and Wikimedia's per-IP
+  limit counts *requests over a rolling window* — not concurrency. After a 90s rest, 8
+  sequential REST lookups succeed; every shape tried after that was refused identically:
+
+  | shape | result |
+  | --- | --- |
+  | 4 in parallel | ok=8 429=0 (first run after the rest) |
+  | 3 in parallel, 0.2s apart | ok=1 429=7 |
+  | 2 in parallel, 0.3s apart | ok=6 429=0 |
+  | strictly sequential | ok=2 429=6 |
+
+  Since sequential fails the same way as parallel, no pacing or concurrency setting can fix
+  it. `action=query&prop=revisions` takes **up to 50 titles in one request**, so a whole cue
+  costs one request instead of one per word. `glossary.py` parses the returned wikitext
+  itself — language section, POS headings, `#` and `##` definition lines — which is why
+  `_expand_template` and `_parse_entries` exist. The parse is a slight *improvement* on the
+  REST output: it keeps labels like "(figuratively)", and it does not leak the rendered page's
+  CSS into the gloss, which the REST endpoint does for `с`.
+- **Gloss the whole cue in one call, three cues ahead.** `overlay.ts` warms `GLOSS_AHEAD` cues
+  past the one playing, and `content.ts` sends each cue's words as a single `/translate`
+  request. Splitting it per word would multiply the upstream quota cost by the word count for
+  no gain.
 - **Keep machine-translation requests sequential.** Google's free endpoint is rate-limited by
   IP. Two faster-looking shapes were measured and are worse: joining the texts with newlines
   into one request makes the `/m` endpoint return no result container at all, and issuing them
@@ -178,12 +199,17 @@ Three rules, each of which cost some measuring to arrive at:
 - **Ask Wiktionary once per word, ever.** `glossary.py` caches both hits and "no entry" (a fact
   that does not change) in `backend/.gloss-cache.json`, written atomically every 5s and on
   shutdown, and reloaded at startup. A 429 or a timeout is *not* cached — nothing was learned
-  about that word. Requests are also spaced by an adaptive gap that doubles on every 429 and
-  eases back after a clean run, so a cue's worth of words cannot trip the limit in the first
-  place.
+  about that word.
 
-Measured on an 8-word cue against a throttled IP: 36.2s with 6 of 8 blank before, 11.1s with
-8 of 8 filled after, 0.9ms on a repeat, and 0.17s after a backend restart.
+Measured on an 8-word cue, each step against the same throttled IP:
+
+| | time | filled |
+| --- | --- | --- |
+| one REST request per word, retrying into the limit | 36.2s | 2 of 8 |
+| + caching, cooldowns, no retry on a rate limit | 11.1s | 8 of 8 |
+| + one batched Action API request per cue | **0.60s** | 8 of 8 |
+| second cue, cache still cold | 0.23s | 8 of 8 |
+| any repeat, in process | 0.001s | 8 of 8 |
 
 Latency is hidden by prefetching: as each cue renders, `overlay.ts` hands `content.ts` the
 lemma+POS of every word in it, so by the time the pointer lands the gloss is usually cached.

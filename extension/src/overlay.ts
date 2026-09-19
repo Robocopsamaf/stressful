@@ -25,6 +25,11 @@ export interface Overlay {
 }
 
 const PREFETCH_AHEAD = 30;
+// Cues whose words are glossed ahead of time. A first-encounter gloss costs the
+// better part of a second even with the lookups overlapped, so warming only the
+// cue on screen means the cue is often gone before its words arrive. Three cues
+// is roughly six seconds of runway, and every word is cached after that.
+const GLOSS_AHEAD = 3;
 
 function findCueIndex(cues: Cue[], t: number): number {
   let lo = 0;
@@ -165,6 +170,16 @@ export function mountOverlay(deps: OverlayDeps): Overlay {
     }
   }
 
+  // Warm the glosses for the cue at `idx` and the next few, as soon as each one
+  // has been analyzed. Cues still waiting on the analyzer are skipped rather
+  // than waited for — they get warmed when their own render comes round.
+  function prefetchFrom(idx: number) {
+    for (let k = 0; k <= GLOSS_AHEAD; k++) {
+      const s = analyzed.get(idx + k);
+      if (s) prefetchFor(s);
+    }
+  }
+
   // The lemmas the tooltip would ask for if the user hovered each word of this
   // cue. Deduped here; api.ts dedupes again across cues.
   function prefetchFor(sentence: AnalyzedSentence) {
@@ -244,7 +259,7 @@ export function mountOverlay(deps: OverlayDeps): Overlay {
     const analyzedSentence = analyzed.get(idx);
     if (analyzedSentence) {
       renderAnalyzed(ruLine, analyzedSentence, settings);
-      prefetchFor(analyzedSentence);
+      prefetchFrom(idx);
     } else {
       hideTooltip();
       ruLine.textContent = cue.text;
@@ -253,14 +268,18 @@ export function mountOverlay(deps: OverlayDeps): Overlay {
           const s = analyzed.get(idx);
           if (s) {
             renderAnalyzed(ruLine, s, settings);
-            prefetchFor(s);
+            prefetchFrom(idx);
           }
         }
       });
     }
     const prefetch: number[] = [];
     for (let k = 1; k <= PREFETCH_AHEAD; k++) prefetch.push(idx + k);
-    ensureAnalyzed(prefetch);
+    // Warm the upcoming cues' glosses once their analysis lands, so the runway
+    // survives a jump in playback position.
+    ensureAnalyzed(prefetch).then(() => {
+      if (currentIdx === idx) prefetchFrom(idx);
+    });
   }
 
   raf = requestAnimationFrame(loop);

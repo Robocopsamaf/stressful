@@ -79,16 +79,18 @@ function prefetchWords(words: { text: string; pos: string }[]) {
   const target = s.targetLang;
   if (!target || target === activeSourceLang) return;
   primeSettings(s);
-  // One request per word, not one for the whole cue. The gloss source is
-  // rate-limited, so the backend answers a batch strictly in order — and a
-  // single batched promise means a hover on the first word waits for the last
-  // word too. Per-word requests let `api.ts` hand each hover exactly the one
-  // promise it needs, which resolves as soon as that word lands.
-  for (const w of words) {
-    void translateBatch([w.text], target, activeSourceLang, [w.pos]).catch(() => {
-      /* best effort — the hover path retries and reports for real */
-    });
-  }
+  // Deliberately one request for the whole cue. Wiktionary's per-IP limit counts
+  // requests over a window, and the backend now looks a batch up in a single
+  // upstream call, so splitting the cue into one request per word would cost
+  // eight times the quota to answer the same cue.
+  void translateBatch(
+    words.map((w) => w.text),
+    target,
+    activeSourceLang,
+    words.map((w) => w.pos),
+  ).catch(() => {
+    /* best effort — the hover path retries and reports for real */
+  });
 }
 
 async function setup(settings: Settings, videoId: string) {

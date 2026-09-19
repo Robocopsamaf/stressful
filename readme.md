@@ -53,8 +53,9 @@ speech go to `/translate` for a gloss (cached, so each word is fetched at most o
 of each cue are prefetched as it appears, so a hover is normally a cache hit rather than a
 round trip. Glosses come from the English Wiktionary; a non-English target language or a word
 with no entry falls back to Google Translate via `deep-translator`. Both sources rate-limit per
-IP, so glosses are cached to disk (`backend/.gloss-cache.json`) and each source is given a
-cooldown when it pushes back, rather than being retried. In dual mode the same
+IP by request count, so a whole cue's words are looked up in a single batched request, glosses
+are cached to disk (`backend/.gloss-cache.json`), and each source is given a cooldown when it
+pushes back rather than being retried. In dual mode the same
 endpoint is sent whole cue sentences instead, with no part of speech, so it always takes the
 machine-translation path.
 
