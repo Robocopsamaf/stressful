@@ -16,6 +16,9 @@ from analyzer import AnalyzedSentence, Analyzer
 async def lifespan(app: FastAPI):
     get_analyzer().warm("ru")
     yield
+    # Wiktionary's per-IP budget is tight enough that losing a session's glosses
+    # on shutdown is a real cost; the periodic flush may be up to 5s behind.
+    glossary.flush_cache()
 
 
 app = FastAPI(title="Stressful Analyzer", version="0.1.0", lifespan=lifespan)
@@ -98,11 +101,30 @@ def _make_translator(source: str, target: str) -> Any:
 # word, so a bare failure is a visible "—" in the tooltip.
 _RETRY_DELAYS = [0.4, 0.9, 1.6]
 
+# Being rate-limited is the one failure retrying cannot fix: the endpoint is
+# refusing this IP for a while, so the three sleeps above just burn ~2.9s per
+# word and keep the limit alive. Back off wholesale instead, and answer "" at
+# once for every word until the window passes — a tooltip that says "—" beats a
+# tooltip that spins for five seconds and then says "—".
+_RATE_LIMIT_COOLDOWN = 120.0
+_MT_COOLDOWN_UNTIL = 0.0
+
+
+def _mt_cooldown_remaining() -> float:
+    return max(0.0, _MT_COOLDOWN_UNTIL - time.monotonic())
+
+
+def _is_rate_limited(e: Exception) -> bool:
+    return type(e).__name__ == "TooManyRequests"
+
 
 def _translate_one(source: str, target: str, text: str) -> str:
     """Translate a single string, retrying the transient empty-page responses.
     Returns "" if it ultimately failed — the caller leaves the word unglossed
     rather than failing the whole request."""
+    global _MT_COOLDOWN_UNTIL
+    if _mt_cooldown_remaining() > 0:
+        return ""
     last: Exception | None = None
     for attempt in range(len(_RETRY_DELAYS) + 1):
         try:
@@ -113,6 +135,15 @@ def _translate_one(source: str, target: str, text: str) -> str:
                 return r
         except Exception as e:  # noqa: BLE001 - deep_translator raises various types
             last = e
+            if _is_rate_limited(e):
+                _MT_COOLDOWN_UNTIL = max(
+                    _MT_COOLDOWN_UNTIL, time.monotonic() + _RATE_LIMIT_COOLDOWN
+                )
+                print(
+                    f"[translate] rate-limited; backing off for {_RATE_LIMIT_COOLDOWN:.0f}s",
+                    flush=True,
+                )
+                return ""
         if attempt < len(_RETRY_DELAYS):
             time.sleep(_RETRY_DELAYS[attempt])
     if last is not None:

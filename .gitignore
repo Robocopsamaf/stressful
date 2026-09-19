@@ -19,3 +19,6 @@ extension/web-ext-artifacts/
 # Tooling caches / local agent state
 .claude/
 .antigravitycli/
+
+# local Wiktionary gloss cache
+backend/.gloss-cache.json

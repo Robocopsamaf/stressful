@@ -144,6 +144,10 @@ backend/
 - `tooltip.ts` takes a synchronous `glossEnabled` predicate. Dual mode returns false, so the
   translation row is never created — the translated line already says it — and no per-word
   request is made. `prefetchWords` is gated the same way.
+- `prefetchWords` issues **one request per word**, not one for the cue. The backend answers a
+  batch strictly in order, so a single batched promise would make a hover on the first word
+  wait for the last word too; per-word requests let `api.ts` hand each hover the one promise it
+  needs, and its in-flight dedupe still stops the hover from asking twice.
 - A mode change is a **heavy** settings change in the `storage.onChanged` listener: the overlay
   is torn down and `setup()` re-runs. That is why `applySettings` never has to add or remove the
   second line.
@@ -165,6 +169,21 @@ Three rules, each of which cost some measuring to arrive at:
   into one request makes the `/m` endpoint return no result container at all, and issuing them
   concurrently blanks about a third of a batch. Sequential single words are fine — 26 in a row
   measured clean. `_translate_chunk` in `app.py` carries this note.
+- **Treat a rate limit as a state, not an error.** Both upstreams throttle per IP, and neither
+  responds to retrying. Wiktionary answers `429` with `x-envoy-ratelimited: true` and a
+  `Retry-After`; Google raises `TooManyRequests`. Each gets a cooldown: while it is open, that
+  source is skipped outright and the word falls through (or comes back blank) immediately,
+  instead of spending a round trip — or, in Google's case, `0.4 + 0.9 + 1.6s` of retry sleeps —
+  to be refused again. The retries are kept for the transient flap they were measured against.
+- **Ask Wiktionary once per word, ever.** `glossary.py` caches both hits and "no entry" (a fact
+  that does not change) in `backend/.gloss-cache.json`, written atomically every 5s and on
+  shutdown, and reloaded at startup. A 429 or a timeout is *not* cached — nothing was learned
+  about that word. Requests are also spaced by an adaptive gap that doubles on every 429 and
+  eases back after a clean run, so a cue's worth of words cannot trip the limit in the first
+  place.
+
+Measured on an 8-word cue against a throttled IP: 36.2s with 6 of 8 blank before, 11.1s with
+8 of 8 filled after, 0.9ms on a repeat, and 0.17s after a backend restart.
 
 Latency is hidden by prefetching: as each cue renders, `overlay.ts` hands `content.ts` the
 lemma+POS of every word in it, so by the time the pointer lands the gloss is usually cached.

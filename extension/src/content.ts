@@ -79,14 +79,16 @@ function prefetchWords(words: { text: string; pos: string }[]) {
   const target = s.targetLang;
   if (!target || target === activeSourceLang) return;
   primeSettings(s);
-  void translateBatch(
-    words.map((w) => w.text),
-    target,
-    activeSourceLang,
-    words.map((w) => w.pos),
-  ).catch(() => {
-    /* best effort — the hover path retries and reports for real */
-  });
+  // One request per word, not one for the whole cue. The gloss source is
+  // rate-limited, so the backend answers a batch strictly in order — and a
+  // single batched promise means a hover on the first word waits for the last
+  // word too. Per-word requests let `api.ts` hand each hover exactly the one
+  // promise it needs, which resolves as soon as that word lands.
+  for (const w of words) {
+    void translateBatch([w.text], target, activeSourceLang, [w.pos]).catch(() => {
+      /* best effort — the hover path retries and reports for real */
+    });
+  }
 }
 
 async function setup(settings: Settings, videoId: string) {
