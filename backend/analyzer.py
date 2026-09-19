@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import threading
 from typing import Callable, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel
@@ -74,6 +75,13 @@ def _patch_ruaccent_token_type_ids() -> None:
 
 ACUTE = "́"
 _PLUS_MARK_RE = re.compile(r"\+([а-яёА-ЯЁ])")
+# Apostrophes are word-internal in Ukrainian (ім'я, п'ять) and spaCy keeps such
+# words as one token, so the splitter has to as well.
+_APOSTROPHES = ("'", "’")
+# A "word" for colouring/tooltip purposes: letters, optionally joined by
+# internal apostrophes. `tok.is_alpha` is False for п'ять, which is why we
+# don't use it.
+_WORD_RE = re.compile(r"^[^\W\d_]+(?:['’][^\W\d_]+)*$", re.UNICODE)
 
 POS_COLOR = {
     "VERB": "verb",
@@ -98,6 +106,9 @@ class Token(BaseModel):
     morph: Dict[str, str]
     color_class: str
     is_word: bool
+    # True when the tokenizer saw whitespace after this token. The frontend
+    # needs it to re-join tokens: no punctuation heuristic gets кто-то right.
+    ws: bool
 
 
 class AnalyzedSentence(BaseModel):
@@ -110,21 +121,65 @@ def _strip_accent(s: str) -> str:
 
 
 def _split_accented(accented: str) -> List[str]:
-    """Naively split accentizer output into word-like pieces aligned to plain tokens."""
+    """Split accentizer output into word-like pieces aligned to spaCy's tokens.
+
+    Alphanumerics and the combining acute accumulate into one piece, so digit
+    runs stay whole. An apostrophe joins the piece only between two letters.
+    Everything else, hyphens included, becomes its own piece — spaCy splits
+    кто-то into three tokens, so keeping the hyphen glued here would make
+    every hyphenated word miss the lookup.
+    """
     out: List[str] = []
     buf: List[str] = []
-    for ch in accented:
-        if ch.isalpha() or ch == ACUTE or ch == "-":
+    for i, ch in enumerate(accented):
+        if ch.isalnum() or ch == ACUTE:
             buf.append(ch)
-        else:
-            if buf:
-                out.append("".join(buf))
-                buf = []
-            if not ch.isspace():
-                out.append(ch)
+            continue
+        if (
+            ch in _APOSTROPHES
+            and _strip_accent("".join(buf))[-1:].isalpha()
+            and accented[i + 1 : i + 2].isalpha()
+        ):
+            buf.append(ch)
+            continue
+        if buf:
+            out.append("".join(buf))
+            buf = []
+        if not ch.isspace():
+            out.append(ch)
     if buf:
         out.append("".join(buf))
     return out
+
+
+class _AccentCursor:
+    """Feeds accentizer pieces to spaCy tokens for ONE sentence.
+
+    Positional first: pieces are consumed in order, so a homograph that occurs
+    twice with different stress (за́мок / замо́к) gets the right one each time. A
+    surface map is kept only as a fallback for when the two tokenizers disagree
+    about how to cut the text.
+    """
+
+    _WINDOW = 4
+
+    def __init__(self, accented_full: str) -> None:
+        self.pieces = _split_accented(accented_full)
+        self.plain = [_strip_accent(p) for p in self.pieces]
+        self.pos = 0
+        self.by_surface: Dict[str, str] = {}
+        for piece, plain in zip(self.pieces, self.plain):
+            if plain and plain not in self.by_surface:
+                self.by_surface[plain] = piece
+
+    def take(self, surface: str) -> str:
+        # Scan a short window so one token the two tokenizers cut differently
+        # doesn't desynchronise the rest of the sentence.
+        for j in range(self.pos, min(self.pos + self._WINDOW, len(self.pieces))):
+            if self.plain[j] == surface:
+                self.pos = j + 1
+                return self.pieces[j]
+        return self.by_surface.get(surface, surface)
 
 
 class _LangPipeline:
@@ -186,13 +241,21 @@ _PIPELINE_BUILDERS: Dict[str, Callable[[], _LangPipeline]] = {
 class Analyzer:
     def __init__(self) -> None:
         self._pipelines: Dict[str, _LangPipeline] = {}
+        self._build_lock = threading.Lock()
 
     def _pipeline(self, lang: str) -> _LangPipeline:
         if lang not in _PIPELINE_BUILDERS:
             raise ValueError(f"unsupported source language: {lang}")
-        if lang not in self._pipelines:
-            self._pipelines[lang] = _PIPELINE_BUILDERS[lang]()
-        return self._pipelines[lang]
+        cached = self._pipelines.get(lang)
+        if cached is not None:
+            return cached
+        # FastAPI runs these sync endpoints in a thread pool and the extension
+        # fires analyze + prefetch concurrently, so without the lock two
+        # threads both miss and both load the (very heavy) models.
+        with self._build_lock:
+            if lang not in self._pipelines:
+                self._pipelines[lang] = _PIPELINE_BUILDERS[lang]()
+            return self._pipelines[lang]
 
     def warm(self, lang: str) -> None:
         self._pipeline(lang)
@@ -243,20 +306,31 @@ _SEP = " ‖ "
 _SEP_TOKEN = "‖"
 
 
+def _make_token(tok, cursor: Optional[_AccentCursor]) -> Token:
+    surface = tok.text
+    morph: Dict[str, str] = {k: v for k, v in tok.morph.to_dict().items()} if tok.morph else {}
+    pos = tok.pos_
+    return Token(
+        surface=surface,
+        accented=cursor.take(surface) if cursor is not None else surface,
+        lemma=tok.lemma_,
+        pos=pos,
+        morph=morph,
+        color_class=POS_COLOR.get(pos, "other"),
+        is_word=bool(_WORD_RE.match(surface)),
+        ws=bool(tok.whitespace_),
+    )
+
+
 def _analyze_batch_impl(pipeline: _LangPipeline, sentences: List[str]) -> List[AnalyzedSentence]:
     if not sentences:
         return []
 
-    # Run accentizer per sentence and build a surface→accented map from the
-    # union of all outputs. (Joining first would be ~equivalent but per-sentence
-    # keeps the accentizer's behaviour predictable.)
+    # Accentize per sentence and keep one cursor per sentence. A map shared
+    # across the batch would make the first "замок" in the batch dictate the
+    # stress of every later one.
     accented_full_list = [pipeline.accent(s) for s in sentences]
-    accented_by_surface: Dict[str, str] = {}
-    for accented_full in accented_full_list:
-        for piece in _split_accented(accented_full):
-            plain = _strip_accent(piece)
-            if plain and plain not in accented_by_surface:
-                accented_by_surface[plain] = piece
+    cursors = [_AccentCursor(a) for a in accented_full_list]
 
     joined = _SEP.join(sentences)
     doc = pipeline.nlp(joined)
@@ -266,21 +340,8 @@ def _analyze_batch_impl(pipeline: _LangPipeline, sentences: List[str]) -> List[A
         if tok.text == _SEP_TOKEN:
             chunks.append([])
             continue
-        surface = tok.text
-        accented = accented_by_surface.get(surface, surface)
-        morph: Dict[str, str] = {k: v for k, v in tok.morph.to_dict().items()} if tok.morph else {}
-        pos = tok.pos_
-        chunks[-1].append(
-            Token(
-                surface=surface,
-                accented=accented,
-                lemma=tok.lemma_,
-                pos=pos,
-                morph=morph,
-                color_class=POS_COLOR.get(pos, "other"),
-                is_word=tok.is_alpha,
-            )
-        )
+        ci = len(chunks) - 1
+        chunks[-1].append(_make_token(tok, cursors[ci] if ci < len(cursors) else None))
 
     # Ensure we have exactly one chunk per input. If SpaCy ever merges or splits
     # an unexpected number of separators, fall back to per-sentence analysis.
@@ -294,27 +355,9 @@ def _analyze_batch_impl(pipeline: _LangPipeline, sentences: List[str]) -> List[A
 
 
 def _analyze_single(pipeline: _LangPipeline, sentence: str, accented_full: str) -> AnalyzedSentence:
-    accented_by_surface: Dict[str, str] = {}
-    for piece in _split_accented(accented_full):
-        plain = _strip_accent(piece)
-        if plain and plain not in accented_by_surface:
-            accented_by_surface[plain] = piece
+    cursor = _AccentCursor(accented_full)
     doc = pipeline.nlp(sentence)
-    tokens: List[Token] = []
-    for tok in doc:
-        surface = tok.text
-        accented = accented_by_surface.get(surface, surface)
-        morph: Dict[str, str] = {k: v for k, v in tok.morph.to_dict().items()} if tok.morph else {}
-        pos = tok.pos_
-        tokens.append(
-            Token(
-                surface=surface,
-                accented=accented,
-                lemma=tok.lemma_,
-                pos=pos,
-                morph=morph,
-                color_class=POS_COLOR.get(pos, "other"),
-                is_word=tok.is_alpha,
-            )
-        )
-    return AnalyzedSentence(text=accented_full, tokens=tokens)
+    return AnalyzedSentence(
+        text=accented_full,
+        tokens=[_make_token(tok, cursor) for tok in doc],
+    )

@@ -32,6 +32,9 @@ export interface Token {
   morph: Record<string, string>;
   color_class: string;
   is_word: boolean;
+  /** Whitespace followed this token in the source text. Optional so a response
+   *  cached from an older backend still type-checks. */
+  ws?: boolean;
 }
 
 export interface AnalyzedSentence {
@@ -41,13 +44,6 @@ export interface AnalyzedSentence {
 
 export interface AnalyzeResponse {
   sentences: AnalyzedSentence[];
-}
-
-export interface CaptionTrackInfo {
-  baseUrl: string;
-  languageCode: string;
-  kind?: string;
-  name?: string;
 }
 
 export type RuntimeMessage =

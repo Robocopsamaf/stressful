@@ -1,6 +1,6 @@
 import browser from "webextension-polyfill";
-import { Settings } from "./types";
-import { findSourceTrack, requestCues } from "./captions";
+import { Cue, Settings } from "./types";
+import { requestCues } from "./captions";
 import { mountOverlay, Overlay } from "./overlay";
 import { analyzeBatch, primeSettings, translateBatch } from "./api";
 import { mountTooltip } from "./tooltip";
@@ -25,6 +25,18 @@ let lastVideoId: string | null = null;
 // after setup() has returned.
 let activeSettings: Settings | null = null;
 let activeSourceLang = "ru";
+// Bumped by every setup(). A setup that finds its token stale lost a race with
+// an SPA navigation or a settings change, and must not touch the DOM again.
+let gen = 0;
+
+const SOURCE_LABELS = SUPPORTED_SOURCES.map((l) => LANG_LABEL[l] ?? l.toUpperCase()).join(" or ");
+
+// The bridge caches what it captured, so a short wait costs nothing and lets us
+// keep asking: the user may enable CC long after the page loaded.
+const BRIDGE_WAIT_MS = 20000;
+// Breathing room between retries. The bridge answers instantly once it holds a
+// capture, so a track that parses to nothing would otherwise spin.
+const RETRY_PAUSE_MS = 2000;
 
 async function getSettings(): Promise<Settings> {
   const resp = (await browser.runtime.sendMessage({ type: "getSettings" })) as Settings;
@@ -72,38 +84,47 @@ function prefetchWords(words: { text: string; pos: string }[]) {
 }
 
 async function setup(settings: Settings, videoId: string) {
+  const my = ++gen;
   overlay?.destroy();
   overlay = null;
+  hideBanner();
   if (!settings.enabled) return;
 
   const tSetup = performance.now();
   primeSettings(settings);
 
-  const track = await findSourceTrack(SUPPORTED_SOURCES);
-  console.log("[stressful] track=", track, { ms_since_setup: Math.round(performance.now() - tSetup) });
-  if (!track) {
-    console.info("[stressful] no supported caption track on this video");
-    return;
-  }
-  const sourceLang = track.languageCode;
-  activeSourceLang = sourceLang;
-  const sourceLabel = LANG_LABEL[sourceLang] ?? sourceLang.toUpperCase();
+  showBanner(`Enable YouTube CC and pick the ${SOURCE_LABELS} track to activate Stressful.`);
 
-  showBanner(`Enable YouTube CC and pick the ${sourceLabel} track to activate Stressful.`);
-
-  // Source captions only — translation happens per word on hover, so there's no
-  // second time-aligned line to keep in sync. Keyed by videoId so a cached
-  // caption from the previous video can't leak in after SPA navigation.
+  // The source language is the one the bridge actually saw a timedtext request
+  // for, not one guessed from the page: ytInitialPlayerResponse is unreachable
+  // from the isolated world and goes stale across SPA navigation.
+  //
+  // No tlang is asked for. This branch renders one source line and glosses each
+  // word on hover through the backend, so there is no second track to fetch.
+  //
+  // Keep asking until captions show up or this setup goes stale. A single long
+  // wait would mean a user who enables CC late gets nothing until reload.
+  let sourceCues: Cue[] = [];
+  let sourceLang = "";
   const tCuesReq = performance.now();
-  const sourceCues = await requestCues(videoId, sourceLang);
+  for (;;) {
+    const got = await requestCues(videoId, SUPPORTED_SOURCES, "", BRIDGE_WAIT_MS);
+    if (my !== gen) return;
+    if (got.src.length > 0) {
+      sourceCues = got.src;
+      sourceLang = got.lang;
+      break;
+    }
+    await new Promise((r) => setTimeout(r, RETRY_PAUSE_MS));
+    if (my !== gen) return;
+  }
+  activeSourceLang = sourceLang;
   console.log("[stressful] requestCues done", {
+    sourceLang,
     sourceCues: sourceCues.length,
+    ms_since_setup: Math.round(performance.now() - tSetup),
     ms_waiting: Math.round(performance.now() - tCuesReq),
   });
-  if (sourceCues.length === 0) {
-    showBanner(`No ${sourceLabel} captions captured. Click YouTube CC button, select ${sourceLabel} track.`);
-    return;
-  }
   hideBanner();
 
   const video = document.querySelector<HTMLVideoElement>("video.html5-main-video");
@@ -132,7 +153,7 @@ function showBanner(text: string) {
     banner = document.createElement("div");
     banner.id = "sr-banner";
     banner.style.cssText =
-      "position:fixed;top:12px;right:12px;z-index:2147483646;background:#7a1f1f;color:#fff;padding:8px 12px;border-radius:4px;font:13px/1.4 'Segoe UI',Arial,sans-serif;max-width:320px;box-shadow:0 4px 12px rgba(0,0,0,0.5);";
+      "position:fixed;top:12px;right:56px;z-index:2147483646;background:#7a1f1f;color:#fff;padding:8px 12px;border-radius:4px;font:13px/1.4 'Segoe UI',Arial,sans-serif;max-width:320px;box-shadow:0 4px 12px rgba(0,0,0,0.5);";
     document.body.appendChild(banner);
   }
   banner.textContent = text;

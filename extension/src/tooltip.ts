@@ -123,6 +123,10 @@ function format(target: HTMLElement) {
     });
 }
 
+export function hideTooltip() {
+  if (tip) tip.style.display = "none";
+}
+
 function position(target: HTMLElement) {
   const t = ensureTip();
   const rect = target.getBoundingClientRect();
@@ -148,6 +152,6 @@ export function mountTooltip(translate: TranslateWord) {
     const target = ev.target as HTMLElement | null;
     if (!target?.matches?.(".sr-tok[data-morph]")) return;
     hoverSeq++; // invalidate any in-flight translation
-    if (tip) tip.style.display = "none";
+    hideTooltip();
   });
 }

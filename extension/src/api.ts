@@ -8,6 +8,22 @@ const translateCache = new Map<string, string>();
 // is rate-sensitive enough that duplicate requests cost real translations.
 const inFlight = new Map<string, Promise<string>>();
 
+// Bounded like the backend's own cache: a long session on a playlist would
+// otherwise grow this without limit.
+const TRANSLATE_CACHE_LIMIT = 8192;
+
+function cacheTranslation(key: string, value: string) {
+  if (translateCache.size >= TRANSLATE_CACHE_LIMIT) {
+    // Drop the oldest ~10%; Map iterates in insertion order.
+    let drop = Math.floor(TRANSLATE_CACHE_LIMIT / 10);
+    for (const k of translateCache.keys()) {
+      translateCache.delete(k);
+      if (--drop <= 0) break;
+    }
+  }
+  translateCache.set(key, value);
+}
+
 export function primeSettings(s: Settings) {
   backendUrl = s.backendUrl.replace(/\/$/, "");
 }
@@ -82,7 +98,7 @@ export async function translateBatch(
       translations.forEach((tr, k) => {
         const src = need[k];
         // Don't cache blanks (rate-limited / failed) so they get retried later.
-        if (tr) translateCache.set(`${source}|${target}|${needPos[k]}|${src}`, tr);
+        if (tr) cacheTranslation(`${source}|${target}|${needPos[k]}|${src}`, tr);
         out[idx[k]] = tr;
       });
     } finally {
@@ -112,6 +128,11 @@ export async function analyzeBatch(texts: string[], source = "ru"): Promise<Anal
     });
     if (!resp.ok) throw new Error(`analyze failed: ${resp.status}`);
     const data = (await resp.json()) as AnalyzeResponse;
+    // A short response would silently misalign every sentence after the gap,
+    // so refuse it rather than cache the wrong analysis against a cue.
+    if (data.sentences.length !== need.length) {
+      throw new Error(`analyze returned ${data.sentences.length} sentences for ${need.length} inputs`);
+    }
     data.sentences.forEach((s, k) => cache.set(keyOf(need[k]), s));
   }
   return texts.map((t) => cache.get(keyOf(t))!);

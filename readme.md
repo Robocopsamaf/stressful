@@ -155,7 +155,7 @@ YouTube's caption endpoint now requires a session-bound proof-of-origin token (`
 
 ## Status
 
-Proof of concept. Personal use only — not on AMO or the Chrome Web Store. Tested on Firefox 115+ and Chromium 111+ on macOS.
+Proof of concept. Personal use only — not on AMO or the Chrome Web Store. Requires Firefox 128+ or Chromium 111+ (the MAIN-world content script the caption bridge needs). Tested on macOS.
 
 ## Stack
 

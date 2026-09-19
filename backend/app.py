@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import time
-from typing import Dict, List, Tuple
+from contextlib import asynccontextmanager
+from typing import Any, Dict, List, Tuple
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,7 +11,14 @@ from pydantic import BaseModel
 import glossary
 from analyzer import AnalyzedSentence, Analyzer
 
-app = FastAPI(title="Stressful Analyzer", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    get_analyzer().warm("ru")
+    yield
+
+
+app = FastAPI(title="Stressful Analyzer", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -27,11 +35,6 @@ def get_analyzer() -> Analyzer:
     if _analyzer is None:
         _analyzer = Analyzer()
     return _analyzer
-
-
-@app.on_event("startup")
-def _warm_up() -> None:
-    get_analyzer().warm("ru")
 
 
 class AnalyzeRequest(BaseModel):
@@ -77,6 +80,17 @@ _TRANSLATE_CACHE: Dict[Tuple[str, str, str, str], str] = {}
 _TRANSLATE_CACHE_LIMIT = 16384
 
 
+# The extension's language list uses YouTube's caption codes; Google Translate
+# spells a couple of them differently and rejects the YouTube spelling outright.
+_TARGET_ALIASES = {"zh-Hans": "zh-CN", "zh-Hant": "zh-TW"}
+
+
+def _make_translator(source: str, target: str) -> Any:
+    from deep_translator import GoogleTranslator
+
+    return GoogleTranslator(source=source, target=_TARGET_ALIASES.get(target, target))
+
+
 # Google's free endpoint flaps: it intermittently serves a page without the
 # result container, which deep-translator surfaces as TranslationNotFound.
 # Measured on single words, roughly a third of first attempts fail while a short
@@ -89,12 +103,12 @@ def _translate_one(source: str, target: str, text: str) -> str:
     """Translate a single string, retrying the transient empty-page responses.
     Returns "" if it ultimately failed — the caller leaves the word unglossed
     rather than failing the whole request."""
-    from deep_translator import GoogleTranslator
-
     last: Exception | None = None
     for attempt in range(len(_RETRY_DELAYS) + 1):
         try:
-            r = GoogleTranslator(source=source, target=target).translate(text)
+            # A fresh translator per attempt: `translate` mutates the instance's
+            # url params (it drops `hl` on a retry), so instances aren't reusable.
+            r = _make_translator(source, target).translate(text)
             if isinstance(r, str) and r:
                 return r
         except Exception as e:  # noqa: BLE001 - deep_translator raises various types
@@ -137,6 +151,17 @@ def translate(req: TranslateRequest) -> TranslateResponse:
         return TranslateResponse(translations=[])
     if not req.target:
         raise HTTPException(status_code=400, detail="target language required")
+
+    # Validate up front so an unsupported code is an explicit 400 rather than a
+    # response full of empty strings. The instance is discarded: each text builds
+    # its own below.
+    try:
+        _make_translator(req.source, req.target)
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unsupported language pair {req.source}->{req.target}: {type(e).__name__}",
+        )
 
     out: List[str] = [""] * len(req.texts)
     misses: List[int] = []
