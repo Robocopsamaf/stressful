@@ -1,10 +1,19 @@
 import browser from "webextension-polyfill";
-import { DEFAULT_SETTINGS, LANGS, Settings } from "./types";
+import { DEFAULT_SETTINGS, LANGS, Settings, SUBTITLE_MODES, SubtitleMode } from "./types";
 
 function $<T extends HTMLElement>(id: string): T {
   const el = document.getElementById(id);
   if (!el) throw new Error(`missing element: ${id}`);
   return el as T;
+}
+
+function populateModes(select: HTMLSelectElement) {
+  for (const { value, label } of SUBTITLE_MODES) {
+    const opt = document.createElement("option");
+    opt.value = value;
+    opt.textContent = label;
+    select.appendChild(opt);
+  }
 }
 
 function populateLangs(select: HTMLSelectElement) {
@@ -26,6 +35,7 @@ async function save(settings: Partial<Settings>): Promise<Settings> {
 }
 
 function setValues(s: Settings) {
+  $<HTMLSelectElement>("sr-mode").value = s.subtitleMode;
   $<HTMLSelectElement>("sr-lang").value = s.targetLang;
   $<HTMLInputElement>("sr-backend").value = s.backendUrl;
   $<HTMLInputElement>("sr-enabled").checked = s.enabled;
@@ -38,6 +48,7 @@ function setValues(s: Settings) {
 
 function readValues(): Partial<Settings> {
   return {
+    subtitleMode: $<HTMLSelectElement>("sr-mode").value as SubtitleMode,
     targetLang: $<HTMLSelectElement>("sr-lang").value,
     backendUrl: $<HTMLInputElement>("sr-backend").value.trim() || DEFAULT_SETTINGS.backendUrl,
     enabled: $<HTMLInputElement>("sr-enabled").checked,
@@ -49,6 +60,7 @@ function readValues(): Partial<Settings> {
 }
 
 async function init() {
+  populateModes($<HTMLSelectElement>("sr-mode"));
   populateLangs($<HTMLSelectElement>("sr-lang"));
   const settings = await load();
   setValues(settings);

@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Stressful",
   "version": "0.1.0",
-  "description": "Dual Russian/Ukrainian + translated YouTube subtitles with stress marks and morphology tooltips.",
+  "description": "Russian/Ukrainian YouTube subtitles with stress marks and morphology tooltips, translated on hover or as a second line.",
   "permissions": ["storage", "activeTab"],
   "host_permissions": [
     "https://www.youtube.com/*",

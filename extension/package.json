@@ -1,7 +1,7 @@
 {
   "name": "stressful",
   "version": "0.1.0",
-  "description": "Firefox extension overlaying YouTube videos with Russian/Ukrainian + translated dual subtitles, stress marks and morphology.",
+  "description": "Extension overlaying YouTube videos with Russian/Ukrainian subtitles, stress marks and morphology, translated on hover or as a second line.",
   "private": true,
   "type": "module",
   "scripts": {

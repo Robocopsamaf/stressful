@@ -1,5 +1,21 @@
+export type SubtitleMode = "hover" | "dual";
+
+export interface SubtitleModeOption {
+  value: SubtitleMode;
+  label: string;
+}
+
+/** Shared by both settings forms — the in-page/popup builder and the options page. */
+export const SUBTITLE_MODES: SubtitleModeOption[] = [
+  { value: "hover", label: "Single line + hover translation" },
+  { value: "dual", label: "Dual subtitle lines" },
+];
+
 export interface Settings {
   enabled: boolean;
+  /** "hover": one source line, each word glossed on hover.
+   *  "dual": source line plus a time-aligned translated line. */
+  subtitleMode: SubtitleMode;
   targetLang: string;
   backendUrl: string;
   showStress: boolean;
@@ -10,6 +26,7 @@ export interface Settings {
 
 export const DEFAULT_SETTINGS: Settings = {
   enabled: true,
+  subtitleMode: "hover",
   targetLang: "en",
   backendUrl: "http://localhost:8765",
   showStress: true,

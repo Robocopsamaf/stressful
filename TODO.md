@@ -49,6 +49,7 @@ rather than mechanics:
 - **No `backfillTranslations`.** The branch renders one source line and glosses
   each word on hover, so there is no second time-aligned line to fill. It asks
   the bridge with an empty `tlang` and ignores the `tr` field.
+  **Superseded** — see "Both modes on `main`" below.
 - **The translator is still built per text** in `app.py`, keeping the branch's
   retry and Wiktionary gloss, with `main`'s YouTube-to-Google target aliases
   applied inside it. `deep_translator` mutates its instance's url params on a
@@ -80,6 +81,31 @@ test runner, so nothing here is wired into `npm test`.
    bridge and the overlay. Covered H2 (a setup that lost the race to an SPA
    navigation mounts nothing), M2 (an empty caption answer is retried), and the
    request shape (`langs: ["ru","uk"]`, empty `tlang`, 20s wait).
+
+## Done — both modes on `main`
+
+The branch was fast-forwarded onto `main` (`61a1557..ff5a64d`, no merge commit)
+and the dual-line path was brought back as a mode rather than left deleted.
+`Settings.subtitleMode` is `"hover"` (the default) or `"dual"`; see
+[DEVELOPMENT.md](DEVELOPMENT.md) §6 for the seams. `backfillTranslations()` was
+restored verbatim from `61a1557`, so it keeps its bug-sweep fixes (H2's
+generation token, H8's per-text isolation). The backend needed no change:
+`pos` was already optional, and a whole sentence with no `pos` skips the
+Wiktionary lookup by itself.
+
+In dual mode the tooltip is morphology only — the translated line already says
+what the word means, and `/translate` is rate-sensitive enough that the per-cue
+word prefetch is worth skipping. `tooltip.ts` takes a synchronous `glossEnabled`
+predicate for this, so the translation row is never created and then withdrawn.
+
+Verified: `tsc --noEmit` clean, both targets build, and three throwaway node
+harnesses (overlay 14 checks, content 14, tooltip 7) all passed — one/two lines
+per mode, backfill appearing mid-cue, the YouTube `tlang` lookup, ad blanking,
+`tlang=""` vs `tlang=en` in the bridge request, the mode flip counting as a heavy
+change, and the gloss/prefetch no-ops in dual mode. Live `/translate` was checked
+against a scratch backend: the Wiktionary gloss path answers
+(`привет`+`NOUN` → "a greeting, a hello, a hi"), the sentence path still returns
+blanks from this IP with `TooManyRequests`, same environmental limit as below.
 
 ## Also open
 

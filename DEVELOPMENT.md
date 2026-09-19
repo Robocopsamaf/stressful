@@ -74,9 +74,10 @@ After editing TypeScript or any file under `extension/public/`, run `npm run bui
 2. Extension loaded.
 3. Open a YouTube video that has a Russian or Ukrainian caption track. The source language is whichever of the two you actually switch on — it is read off the caption request the player makes, not guessed ahead of time.
 4. Click YouTube's **CC** button (the bottom-right of the player). If the auto-picked track isn't Russian / Ukrainian, open the gear icon → **Subtitles/CC** → pick the right track.
-5. The native caption window is hidden by injected CSS; the extension's overlay appears just above the controls — a single source-language line with stress marks like `приве́т` / `приві́т` and POS-coloring. There is no second, translated line.
-6. Hover any word → tooltip showing the accented word, its gloss, its dictionary form + part of speech, and its morph fields (Case, Number, Gender, Tense, Person, Aspect, Mood, etc). The gloss is usually already cached, because each cue's words are prefetched as it appears; on a miss it briefly reads `Fetching translation...`.
-7. Open extension options to change the hover translation language. It takes effect on the next hover — no tab reload needed, since captions don't have to be re-fetched.
+5. The native caption window is hidden by injected CSS; the extension's overlay appears just above the controls — a source-language line with stress marks like `приве́т` / `приві́т` and POS-coloring.
+6. Hover any word → tooltip showing the accented word, its dictionary form + part of speech, and its morph fields (Case, Number, Gender, Tense, Person, Aspect, Mood, etc). In hover mode it also carries the word's gloss, usually already cached because each cue's words are prefetched as it appears; on a miss it briefly reads `Fetching translation...`.
+7. Open extension options and switch **Subtitle mode** to *Dual subtitle lines*. A second, italic line appears under the source line, and the tooltip drops its translation row. No tab reload: the storage listener treats a mode change as heavy and re-runs `setup()`, which re-fetches the captions. Switch back and the second line goes away again.
+8. Change the **translation language**. In hover mode it takes effect on the next hover, with no re-fetch. In dual mode it re-fetches, because it decides which `tlang` track is asked for and what the whole second line says.
 
 If the backend is unreachable a red banner appears in the top-right with instructions; the source-language line still renders (without stress/colors) so the rest of the page is not broken.
 
@@ -88,7 +89,7 @@ Two content scripts run on `youtube.com/*`:
 
 - `page-fetch.js` runs at `document_start` with `world: "MAIN"`. It monkey-patches `window.fetch` and `XMLHttpRequest`. When the patched code sees a request matching `/api/timedtext`, it clones the response, reads the body, and appends `{ videoId, lang, tlang, body, url }` to a short list of captures.
 - `content.js` (ISOLATED world) `postMessage`s a `sr-captions-req` naming the video id and the languages it accepts (`["ru", "uk"]`). It deliberately does **not** decide the source language itself: `ytInitialPlayerResponse` is unreachable from the isolated world, and the server-rendered copy in the DOM still describes the *first* video after an SPA navigation. The bridge resolves on the first capture for that video in one of the requested languages and reports the language back.
-- Only the source track is ever wanted here, so the request carries an empty `tlang` and the bridge's `tr` field always comes back empty: translation is per word, on hover, through the backend. The bridge still handles `tlang` because YouTube's own auto-translate may be on — the single request it makes then carries a `tlang` of its own, so the bridge refetches the same URL (which carries the `pot`) with `tlang` stripped to recover the source track.
+- In hover mode only the source track is wanted, so the request carries an empty `tlang` and the bridge's `tr` field comes back empty: translation is per word, on hover, through the backend. Dual mode passes the target language as `tlang`, and `tr` then carries YouTube's own translated track when it has one. Either way the bridge handles `tlang` on its own account, because YouTube's auto-translate may be on — the single request it makes then carries a `tlang` of its own, so the bridge refetches the same URL (which carries the `pot`) with `tlang` stripped to recover the source track.
 - Waits are short (20s) and the content script re-asks until cues arrive, so enabling CC minutes after page load still works. Several concurrent waits on the same track all resolve.
 
 This is also why the user must enable CC manually — we can't sign URLs ourselves.
@@ -129,10 +130,28 @@ backend/
 └── README.md
 ```
 
-## 6. Word glosses
+## 6. Subtitle modes
 
-Hovering sends the token's **lemma** and its SpaCy POS to `POST /translate`. Three rules, each
-of which cost some measuring to arrive at:
+`Settings.subtitleMode` is `"hover"` (the default) or `"dual"`. The seams:
+
+- `content.ts` passes `settings.targetLang` as the bridge's `tlang` only in dual mode, and only
+  then keeps the `tr` track and builds `translatedByIdx`.
+- `backfillTranslations()` runs only in dual mode, and only when YouTube served no translated
+  track. It orders cues outward from the playhead so the line under what you are watching fills
+  first, then runs 4 workers over 15-cue chunks.
+- `overlay.ts` creates its second `.sr-tr` line only in dual mode, and refreshes it every frame
+  rather than on cue changes, because the backfill lands mid-cue.
+- `tooltip.ts` takes a synchronous `glossEnabled` predicate. Dual mode returns false, so the
+  translation row is never created — the translated line already says it — and no per-word
+  request is made. `prefetchWords` is gated the same way.
+- A mode change is a **heavy** settings change in the `storage.onChanged` listener: the overlay
+  is torn down and `setup()` re-runs. That is why `applySettings` never has to add or remove the
+  second line.
+
+## 7. Word glosses
+
+Hovering in **hover mode** sends the token's **lemma** and its SpaCy POS to `POST /translate`.
+Three rules, each of which cost some measuring to arrive at:
 
 - **Gloss the lemma, not the surface form.** Russian inflection is heavy and an isolated
   inflected form gets mis-sensed.
@@ -154,7 +173,10 @@ instead of issuing a second one. Caches are keyed by `(source, target, pos, word
 sides — the same word under two readings is two different answers — and empty results are
 never cached.
 
-## 7. Known limitations
+Dual mode uses the same endpoint for whole cue sentences, with no `pos`, so `_resolve_one`
+skips the Wiktionary lookup and goes straight to machine translation.
+
+## 8. Known limitations
 
 - YouTube DOM is not contractual. `#movie_player`, `ytInitialPlayerResponse`, and the subtitles button class can change without notice.
 - Auto-generated (ASR) Russian / Ukrainian captions have no punctuation, weakening SpaCy's analysis.

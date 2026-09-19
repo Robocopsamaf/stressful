@@ -43,7 +43,7 @@ Default port `8765`. Override with extra args, e.g. `./run.sh --port 9000`.
 
 - `GET /health` → `{"ok": true}`
 - `POST /analyze` — request body `{ "sentences": ["..."], "source": "ru" }` (source defaults to `ru`; `uk` also supported), response `{ "sentences": [{ "text": "...", "tokens": [...] }] }`.
-- `POST /translate` — request body `{ "texts": ["..."], "target": "en", "source": "ru", "pos": ["NOUN"] }` (source defaults to `ru`; `pos` is optional and parallel to `texts`), response `{ "translations": ["..."] }`. Serves the extension's hover glosses, one word per hover plus a prefetch of each cue's words.
+- `POST /translate` — request body `{ "texts": ["..."], "target": "en", "source": "ru", "pos": ["NOUN"] }` (source defaults to `ru`; `pos` is optional and parallel to `texts`), response `{ "translations": ["..."] }`. Serves the extension's hover glosses (one word per hover plus a prefetch of each cue's words) and, in dual-subtitle mode, whole cue sentences with no `pos`, which skip the Wiktionary lookup.
 
   Two sources, in order. When the target is English and a `pos` is supplied, `glossary.py` looks the word up on the **English Wiktionary** and returns the senses whose part of speech matches — so `дело` as a `NOUN` gives "affair, matter, concern; work, business" and not the past-tense verb reading. Anything else — a non-English target, a word with no entry, a multi-word string — falls through to `deep-translator`'s `GoogleTranslator`.
 

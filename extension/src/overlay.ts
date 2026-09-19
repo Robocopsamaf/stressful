@@ -5,6 +5,11 @@ export interface OverlayDeps {
   root: HTMLElement;
   video: HTMLVideoElement;
   russianCues: Cue[];
+  /** Dual mode only: a YouTube `tlang` track, with its own cue timings. */
+  translatedCues?: Cue[];
+  /** Dual mode only: backend translations, index-aligned 1:1 with `russianCues`
+   *  and filled in asynchronously as the backfill progresses. */
+  translatedByIdx?: (string | undefined)[];
   settings: Settings;
   analyze: (texts: string[]) => Promise<AnalyzedSentence[]>;
   // Warm the translation cache for a cue's words as it appears on screen, so a
@@ -39,6 +44,22 @@ function findCueIndex(cues: Cue[], t: number): number {
   const c = cues[best];
   if (c.start + Math.max(c.dur, 0.1) < t) return -1;
   return best;
+}
+
+// Dual mode: the `tlang` cue covering the midpoint of a source cue. The two
+// tracks are timed independently, so there is no index correspondence to use.
+function findTranslatedFor(cues: Cue[], target: Cue): Cue | null {
+  const mid = target.start + target.dur / 2;
+  let lo = 0;
+  let hi = cues.length - 1;
+  while (lo <= hi) {
+    const m = (lo + hi) >>> 1;
+    const c = cues[m];
+    if (c.start <= mid && c.start + Math.max(c.dur, 0.1) >= mid) return c;
+    if (c.start < mid) lo = m + 1;
+    else hi = m - 1;
+  }
+  return null;
 }
 
 function tokenToSpan(tok: Token, settings: Settings): HTMLElement {
@@ -85,7 +106,18 @@ function renderAnalyzed(target: HTMLElement, sentence: AnalyzedSentence, setting
 }
 
 export function mountOverlay(deps: OverlayDeps): Overlay {
-  const { root, video, russianCues, settings, analyze, prefetchWords, onAnalyzeError, onAnalyzeOk } = deps;
+  const {
+    root,
+    video,
+    russianCues,
+    translatedCues = [],
+    translatedByIdx,
+    settings,
+    analyze,
+    prefetchWords,
+    onAnalyzeError,
+    onAnalyzeOk,
+  } = deps;
 
   const wrap = document.createElement("div");
   wrap.id = "sr-overlay";
@@ -94,6 +126,15 @@ export function mountOverlay(deps: OverlayDeps): Overlay {
   const ruLine = document.createElement("div");
   ruLine.className = "sr-line sr-ru";
   wrap.appendChild(ruLine);
+  // The second line exists only in dual mode. A mode change is treated as a
+  // heavy settings change in content.ts, which tears this overlay down and
+  // mounts a new one, so `applySettings` never has to add or remove it.
+  let trLine: HTMLDivElement | null = null;
+  if (settings.subtitleMode === "dual") {
+    trLine = document.createElement("div");
+    trLine.className = "sr-line sr-tr";
+    wrap.appendChild(trLine);
+  }
   root.appendChild(wrap);
 
   const analyzed = new Map<number, AnalyzedSentence>();
@@ -144,6 +185,7 @@ export function mountOverlay(deps: OverlayDeps): Overlay {
   }
 
   let currentIdx = -2;
+  let lastTrText = "";
   let raf = 0;
   let stopped = false;
 
@@ -160,12 +202,36 @@ export function mountOverlay(deps: OverlayDeps): Overlay {
         hideTooltip();
         ruLine.textContent = "";
       }
+      if (trLine && trLine.textContent) trLine.textContent = "";
+      lastTrText = "";
       currentIdx = -2; // force a re-render once the ad ends
       return;
     }
 
     const t = video.currentTime;
     const idx = findCueIndex(russianCues, t);
+
+    // Dual mode refreshes the translated line every frame rather than only on a
+    // cue change: `backfillTranslations` lands mid-cue, and the line has to
+    // appear when it does. Prefer the index-keyed map (exactly 1:1 with the
+    // source cues); fall back to the time-based lookup for a YouTube `tlang`
+    // track, whose cues carry their own timings.
+    if (trLine) {
+      let next = "";
+      if (idx >= 0) {
+        const fromIdx = translatedByIdx ? translatedByIdx[idx] : undefined;
+        if (fromIdx) {
+          next = fromIdx;
+        } else if (translatedCues.length > 0) {
+          const tcue = findTranslatedFor(translatedCues, russianCues[idx]);
+          if (tcue) next = tcue.text;
+        }
+      }
+      if (next !== lastTrText) {
+        trLine.textContent = next;
+        lastTrText = next;
+      }
+    }
 
     if (idx === currentIdx) return;
     currentIdx = idx;

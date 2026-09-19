@@ -30,9 +30,14 @@ const POS_LABEL: Record<string, string> = {
 };
 
 type TranslateWord = (word: string, pos: string) => Promise<string>;
+/** Whether this tooltip should carry a word translation at all. Checked
+ *  synchronously so the row is never created and then withdrawn: in dual mode
+ *  the translated line is already on screen and the tooltip is morphology only. */
+type GlossEnabled = () => boolean;
 
 let tip: HTMLDivElement | null = null;
 let translateWord: TranslateWord = async () => "";
+let glossEnabled: GlossEnabled = () => true;
 // Bumped on every hover so a slow translation that resolves after the pointer
 // has moved on doesn't overwrite the tooltip for a different word.
 let hoverSeq = 0;
@@ -69,10 +74,14 @@ function format(target: HTMLElement) {
   header.textContent = shown;
   t.appendChild(header);
 
-  const trRow = document.createElement("div");
-  trRow.className = "sr-tt-translation";
-  trRow.textContent = "Fetching translation...";
-  t.appendChild(trRow);
+  const wantsGloss = glossEnabled();
+  let trRow: HTMLDivElement | null = null;
+  if (wantsGloss) {
+    trRow = document.createElement("div");
+    trRow.className = "sr-tt-translation";
+    trRow.textContent = "Fetching translation...";
+    t.appendChild(trRow);
+  }
 
   // Dictionary form + part of speech.
   if (lemma || pos) {
@@ -104,21 +113,26 @@ function format(target: HTMLElement) {
     t.appendChild(body);
   }
 
+  // Bump the sequence even when no translation is requested, so an in-flight
+  // one from a previous hover can't land in this tooltip.
+  const seq = ++hoverSeq;
+  if (!trRow) return;
+
   // Kick off the async word translation. Translate the lemma (dictionary form),
   // not the inflected surface — Russian inflection is heavy and an isolated
   // inflected form is often mis-sensed (e.g. instrumental "приветом" → "with a
   // greeting" instead of the noun "привет" → "greeting").
-  const seq = ++hoverSeq;
+  const row = trRow;
   const word = (lemma || surface).trim();
   translateWord(word, pos)
     .then((tr) => {
       if (seq !== hoverSeq) return; // pointer moved to another word
-      trRow.textContent = tr || "—";
+      row.textContent = tr || "—";
       position(target); // size changed; re-anchor
     })
     .catch(() => {
       if (seq !== hoverSeq) return;
-      trRow.textContent = "(translation unavailable)";
+      row.textContent = "(translation unavailable)";
       position(target);
     });
 }
@@ -140,8 +154,9 @@ function position(target: HTMLElement) {
   t.style.top = `${Math.round(top + window.scrollY)}px`;
 }
 
-export function mountTooltip(translate: TranslateWord) {
+export function mountTooltip(translate: TranslateWord, wantsGloss: GlossEnabled = () => true) {
   translateWord = translate;
+  glossEnabled = wantsGloss;
   document.addEventListener("mouseover", (ev) => {
     const target = ev.target as HTMLElement | null;
     if (!target?.matches?.(".sr-tok[data-morph]")) return;

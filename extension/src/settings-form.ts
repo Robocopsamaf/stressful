@@ -1,5 +1,5 @@
 import browser from "webextension-polyfill";
-import { DEFAULT_SETTINGS, LANGS, Settings } from "./types";
+import { DEFAULT_SETTINGS, LANGS, Settings, SUBTITLE_MODES, SubtitleMode } from "./types";
 
 export async function getSettings(): Promise<Settings> {
   const resp = (await browser.runtime.sendMessage({ type: "getSettings" })) as Settings;
@@ -36,8 +36,18 @@ export function buildSettingsForm(initial: Settings): BuiltForm {
   enabledLabel.appendChild(el("span", {}, "Enabled"));
   form.appendChild(enabledLabel);
 
+  const modeWrap = el("label", { class: "sr-panel-field" });
+  modeWrap.appendChild(el("span", {}, "Subtitle mode"));
+  const modeSel = el("select", { name: "subtitleMode" }) as HTMLSelectElement;
+  for (const { value, label } of SUBTITLE_MODES) {
+    modeSel.appendChild(el("option", { value }, label));
+  }
+  modeSel.value = initial.subtitleMode;
+  modeWrap.appendChild(modeSel);
+  form.appendChild(modeWrap);
+
   const langWrap = el("label", { class: "sr-panel-field" });
-  langWrap.appendChild(el("span", {}, "Hover translation language"));
+  langWrap.appendChild(el("span", {}, "Translation language"));
   const langSel = el("select", { name: "targetLang" }) as HTMLSelectElement;
   for (const { code, label } of LANGS) {
     langSel.appendChild(el("option", { value: code }, `${label} (${code})`));
@@ -102,6 +112,7 @@ export function buildSettingsForm(initial: Settings): BuiltForm {
     e.preventDefault();
     const partial: Partial<Settings> = {
       enabled: enabledInput.checked,
+      subtitleMode: modeSel.value as SubtitleMode,
       targetLang: langSel.value,
       overlayPosition: parseInt(posInput.value, 10),
       showStress: toggleInputs.showStress.checked,

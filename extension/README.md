@@ -40,12 +40,12 @@ Two content scripts inject on `https://www.youtube.com/*`:
 
 | Script | World | When | Purpose |
 | --- | --- | --- | --- |
-| `page-fetch.js` | MAIN | `document_start` | Monkey-patches `fetch` + `XMLHttpRequest`. Captures bodies of `api/timedtext` requests (the only way to get a valid `pot`-signed caption URL), keyed by `videoId\|lang\|tlang` so SPA navigation between videos picks up fresh cues instead of replaying the previous video's track. Listens for `sr-captions-req` postMessages and replies with the captured body. No translated track is ever fetched — translation is per hovered word. |
-| `content.js` | ISOLATED | `document_idle` | Reads `ytInitialPlayerResponse` to find a supported source-language track (ru or uk), asks the bridge for cues, mounts the overlay, syncs to `video.currentTime`, calls the backend per cue, renders tokens and the hover tooltip (gloss + morphology). |
+| `page-fetch.js` | MAIN | `document_start` | Monkey-patches `fetch` + `XMLHttpRequest`. Captures bodies of `api/timedtext` requests (the only way to get a valid `pot`-signed caption URL), keyed by `videoId\|lang\|tlang` so SPA navigation between videos picks up fresh cues instead of replaying the previous video's track. Listens for `sr-captions-req` postMessages and replies with the captured body. A translated track is fetched only in dual mode, when the request names a `tlang`. |
+| `content.js` | ISOLATED | `document_idle` | Reads `ytInitialPlayerResponse` to find a supported source-language track (ru or uk), asks the bridge for cues, mounts the overlay, syncs to `video.currentTime`, calls the backend per cue, renders tokens and the hover tooltip, and in dual mode fills the second line from YouTube's translated track or the backend. |
 
 `styles.css` adds the overlay styles, POS colors, tooltip box, and a rule hiding `.ytp-caption-window-container` so the native caption window doesn't overlap ours.
 
-The toolbar popup is `public/popup.html` (enable toggle + link to options); the options page is `public/options.html` (hover translation language, backend URL, display toggles). Settings are stored via `browser.storage.sync`.
+The toolbar popup is `public/popup.html` (enable toggle + link to options); the options page is `public/options.html` (subtitle mode, translation language, backend URL, display toggles). Settings are stored via `browser.storage.sync`.
 
 ## Source layout
 
@@ -75,8 +75,8 @@ public/
 3. A red banner appears top-right: *"Enable YouTube CC and pick the Russian/Ukrainian track to activate Stressful."*
 4. Click YouTube's **CC** button. If multiple subtitle tracks exist, open the gear icon → **Subtitles/CC** and select the Russian or Ukrainian track.
 5. The bridge captures the caption response. The banner disappears; the single source line renders, stress-marked and color-coded by part of speech.
-6. Hovering a word shows the rendered (accented) form, its gloss, its dictionary form and part of speech, and its morphology. `tooltip.ts` calls the `translateWord` callback injected by `content.ts`, passing the token's **lemma** and its SpaCy **POS** to `POST /translate` — the POS picks the right Wiktionary sense, so it's part of the cache key too.
-7. The gloss is normally already there, because `overlay.ts` prefetches every word of a cue as that cue renders. `Fetching translation...` only appears on a genuine miss. `api.ts` caches results and dedupes in-flight requests, so a hover landing mid-prefetch joins the pending request rather than issuing a second one, and a response that arrives after the pointer has moved on is discarded.
+6. Hovering a word shows the rendered (accented) form, its dictionary form and part of speech, and its morphology; in hover mode it also shows the word's gloss. `tooltip.ts` calls the `translateWord` callback injected by `content.ts`, passing the token's **lemma** and its SpaCy **POS** to `POST /translate` — the POS picks the right Wiktionary sense, so it's part of the cache key too.
+7. In hover mode the gloss is normally already there, because `overlay.ts` prefetches every word of a cue as that cue renders. `Fetching translation...` only appears on a genuine miss. `api.ts` caches results and dedupes in-flight requests, so a hover landing mid-prefetch joins the pending request rather than issuing a second one, and a response that arrives after the pointer has moved on is discarded.
 
 ## Common edits
 
@@ -88,6 +88,7 @@ public/
 - **Translate the surface form instead of the lemma**: change the `word` chosen in `format()` in `src/tooltip.ts`.
 - **Change the "Fetching translation..." placeholder**: same function, where `.sr-tt-translation` is first filled.
 - **Stop prefetching whole cues**: drop the `prefetchWords` dep passed to `mountOverlay` in `src/content.ts`; hovers then fetch lazily, one word at a time.
+- **Restyle the dual-mode second line**: edit `.sr-tr` in `public/styles.css`. It is only created when `settings.subtitleMode === "dual"` (`src/overlay.ts`).
 
 ## Known limitations
 

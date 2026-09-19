@@ -1,11 +1,22 @@
 # Stressful
 
-A Firefox + Chrome extension that overlays YouTube videos with a **single** subtitle line in
-the spoken language — Russian or Ukrainian — stressed vowels marked (e.g. `приве́т`, `приві́т`)
-and color-coded by part of speech.
+A Firefox + Chrome extension that overlays YouTube videos with a subtitle line in the spoken
+language — Russian or Ukrainian — stressed vowels marked (e.g. `приве́т`, `приві́т`) and
+color-coded by part of speech.
 
-**Hover any word** to get its meaning plus full grammatical information — dictionary form,
-part of speech, and morphology (case, number, gender, tense, person, aspect, mood).
+**Hover any word** to get its full grammatical information — dictionary form, part of speech,
+and morphology (case, number, gender, tense, person, aspect, mood).
+
+Two **subtitle modes**, switchable in the settings at any time:
+
+- **Single line + hover translation** (default) — one line, in the source language. Translation
+  happens on demand, one word at a time, when you hover, so the source language stays in front
+  of you instead of your eye dropping to the English. The hover box carries the word's meaning
+  alongside its grammar.
+- **Dual subtitle lines** — the source line plus a time-aligned translated line underneath, as
+  ordinary dual subtitles. YouTube's own translated track is used when it exists; otherwise the
+  whole caption track is translated through the backend, nearest the playhead first. The hover
+  box is grammar only here: the meaning is already on screen.
 
 The source language is auto-detected from the available YouTube caption tracks (ru preferred,
 then uk). Meanings come from the English Wiktionary, filtered to the part of speech SpaCy
@@ -13,9 +24,6 @@ assigned the word in that sentence. So `дело` as a noun gives "affair, matte
 business", and the same spelling read as a verb gives the past-tense form instead — the sense
 you're actually looking at, rather than whichever one a translation engine happened to pick.
 
-There is no second, translated subtitle line by design. Translation happens on demand, one
-word at a time, when you hover — so the source language stays in front of you instead of your
-eye dropping to the English.
 
 ## Architecture
 
@@ -25,7 +33,8 @@ eye dropping to the English.
 │  page             │                             │  (TypeScript, MV3) │
 └───────────────────┘                             └─────────┬──────────┘
                                                             │ POST /analyze   (per cue)
-                                                            │ POST /translate (per hovered word)
+                                                            │ POST /translate (hovered word,
+                                                            │                  or whole cues)
                                                             ▼
                                               ┌──────────────────────────┐
                                               │ Local FastAPI backend    │
@@ -39,11 +48,13 @@ eye dropping to the English.
 Browsers cannot run SpaCy / ruaccent / ukrainian-word-stress, so a small Python backend
 (FastAPI) runs locally. The extension captures the caption track (ru or uk) and batches its
 cues to `/analyze`, with a `source` lang field, for per-token POS + morphology + stress, which
-it renders as the color-coded overlay. When you hover a word, its **lemma** and part of speech
-go to `/translate` for a gloss (cached, so each word is fetched at most once). The words of
-each cue are also prefetched as it appears, so a hover is normally a cache hit rather than a
+it renders as the color-coded overlay. In hover mode, a hovered word's **lemma** and part of
+speech go to `/translate` for a gloss (cached, so each word is fetched at most once); the words
+of each cue are prefetched as it appears, so a hover is normally a cache hit rather than a
 round trip. Glosses come from the English Wiktionary; a non-English target language or a word
-with no entry falls back to Google Translate via `deep-translator`.
+with no entry falls back to Google Translate via `deep-translator`. In dual mode the same
+endpoint is sent whole cue sentences instead, with no part of speech, so it always takes the
+machine-translation path.
 
 ## Repository layout
 
@@ -100,7 +111,7 @@ stressful/
    - **Firefox** — `about:debugging#/runtime/this-firefox` → **Load Temporary Add-on…** → pick `extension/dist-firefox/manifest.json`
    - **Chrome** (or Edge / Brave) — `chrome://extensions` → enable **Developer mode** → **Load unpacked** → pick `extension/dist-chrome/`
 
-4. Open a YouTube video that has a Russian or Ukrainian caption track. Click YouTube's **CC** button and select that track (gear icon → Subtitles/CC → Russian / Ukrainian). The extension intercepts the caption fetch, hides the native caption window, renders the single color-coded source line, and you can hover any word for its meaning and grammar.
+4. Open a YouTube video that has a Russian or Ukrainian caption track. Click YouTube's **CC** button and select that track (gear icon → Subtitles/CC → Russian / Ukrainian). The extension intercepts the caption fetch, hides the native caption window, renders the color-coded source line (plus a translated line in dual mode), and you can hover any word for its grammar.
 
 Full walkthrough in [DEVELOPMENT.md](DEVELOPMENT.md).
 
@@ -145,7 +156,8 @@ Not yet verified on Windows — if you hit something not listed here, that's wor
 
 Right-click the extension's toolbar icon → **Manage Extension → Options**:
 
-- **Hover translation language** — the language hovered words are glossed into. English gets POS-matched Wiktionary senses; other languages fall back to Google Translate.
+- **Subtitle mode** — *Single line + hover translation* (default) or *Dual subtitle lines*. Switching takes effect immediately; the captions are re-fetched behind the overlay.
+- **Translation language** — the language hovered words are glossed into, and the language the second line is translated into in dual mode. English gets POS-matched Wiktionary senses for hover glosses; other languages fall back to Google Translate.
 - **Backend URL** — defaults to `http://localhost:8765`.
 - Toggles for stress marks, POS colors, and hover tooltips.
 
