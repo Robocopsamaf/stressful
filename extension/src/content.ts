@@ -1,6 +1,6 @@
 import browser from "webextension-polyfill";
 import { Settings } from "./types";
-import { findSourceTrack, requestCues } from "./captions";
+import { requestCues } from "./captions";
 import { mountOverlay, Overlay } from "./overlay";
 import { analyzeBatch, primeSettings, translateBatch } from "./api";
 import { Cue } from "./types";
@@ -21,6 +21,18 @@ const LANG_LABEL: Record<string, string> = {
 
 let overlay: Overlay | null = null;
 let lastVideoId: string | null = null;
+// Bumped by every setup(). A setup that finds its token stale lost a race with
+// an SPA navigation or a settings change, and must not touch the DOM again.
+let gen = 0;
+
+const SOURCE_LABELS = SUPPORTED_SOURCES.map((l) => LANG_LABEL[l] ?? l.toUpperCase()).join(" or ");
+
+// The bridge caches what it captured, so a short wait costs nothing and lets us
+// keep asking: the user may enable CC long after the page loaded.
+const BRIDGE_WAIT_MS = 20000;
+// Breathing room between retries. The bridge answers instantly once it holds a
+// capture, so a track that parses to nothing would otherwise spin.
+const RETRY_PAUSE_MS = 2000;
 
 async function getSettings(): Promise<Settings> {
   const resp = (await browser.runtime.sendMessage({ type: "getSettings" })) as Settings;
@@ -37,38 +49,45 @@ function videoIdFromUrl(): string | null {
 }
 
 async function setup(settings: Settings, videoId: string) {
+  const my = ++gen;
   overlay?.destroy();
   overlay = null;
+  hideBanner();
   if (!settings.enabled) return;
 
   const tSetup = performance.now();
   primeSettings(settings);
 
-  const track = await findSourceTrack(SUPPORTED_SOURCES);
-  console.log("[stressful] track=", track, { ms_since_setup: Math.round(performance.now() - tSetup) });
-  if (!track) {
-    console.info("[stressful] no supported caption track on this video");
-    return;
-  }
-  const sourceLang = track.languageCode;
-  const sourceLabel = LANG_LABEL[sourceLang] ?? sourceLang.toUpperCase();
+  showBanner(`Enable YouTube CC and pick the ${SOURCE_LABELS} track to activate Stressful.`);
 
-  showBanner(`Enable YouTube CC and pick the ${sourceLabel} track to activate Stressful.`);
-
-  const tlang = settings.targetLang && settings.targetLang !== sourceLang ? settings.targetLang : "";
+  // Keep asking until captions show up or this setup goes stale. A single
+  // long wait would mean a user who enables CC late gets nothing until reload.
+  let sourceCues: Cue[] = [];
+  let ytTranslatedCues: Cue[] = [];
+  let sourceLang = "";
   const tCuesReq = performance.now();
-  const { src: sourceCues, tr: ytTranslatedCues } = await requestCues(videoId, sourceLang, tlang);
+  for (;;) {
+    const got = await requestCues(videoId, SUPPORTED_SOURCES, settings.targetLang, BRIDGE_WAIT_MS);
+    if (my !== gen) return;
+    if (got.src.length > 0) {
+      sourceCues = got.src;
+      ytTranslatedCues = got.tr;
+      sourceLang = got.lang;
+      break;
+    }
+    await new Promise((r) => setTimeout(r, RETRY_PAUSE_MS));
+    if (my !== gen) return;
+  }
   console.log("[stressful] requestCues done", {
+    sourceLang,
     sourceCues: sourceCues.length,
     ytTr: ytTranslatedCues.length,
+    ms_since_setup: Math.round(performance.now() - tSetup),
     ms_waiting: Math.round(performance.now() - tCuesReq),
   });
-  if (sourceCues.length === 0) {
-    showBanner(`No ${sourceLabel} captions captured. Click YouTube CC button, select ${sourceLabel} track.`);
-    return;
-  }
   hideBanner();
 
+  const tlang = settings.targetLang && settings.targetLang !== sourceLang ? settings.targetLang : "";
   const translatedCues: Cue[] = ytTranslatedCues.slice();
   const translatedByIdx: (string | undefined)[] = new Array(sourceCues.length);
   const needsBackendTranslate = tlang && translatedCues.length === 0;
@@ -93,11 +112,12 @@ async function setup(settings: Settings, videoId: string) {
   });
 
   if (needsBackendTranslate) {
-    void backfillTranslations(sourceCues, translatedByIdx, tlang, sourceLang, video);
+    void backfillTranslations(my, sourceCues, translatedByIdx, tlang, sourceLang, video);
   }
 }
 
 async function backfillTranslations(
+  my: number,
   src: Cue[],
   translatedByIdx: (string | undefined)[],
   tlang: string,
@@ -134,14 +154,34 @@ async function backfillTranslations(
   const CHUNK = 15;
   const CONCURRENCY = 4;
   let lastPaint = 0;
+  // Tracks whether *we* put the banner up, so a later success clears it
+  // without also clearing an unrelated one (e.g. analyzer unreachable).
+  let bannerUp = false;
 
   async function runChunk(indices: number[], label: string) {
+    if (my !== gen) return;
     const cues = indices.map((i) => src[i]);
     const ts = performance.now();
-    const tr = await translateBatch(cues.map((c) => c.text), tlang, sourceLang);
+    let tr: string[];
+    try {
+      tr = await translateBatch(cues.map((c) => c.text), tlang, sourceLang);
+    } catch (e) {
+      if (my !== gen) return;
+      // One failed chunk is not fatal: the rest still fill in, and the banner
+      // goes away as soon as any later chunk succeeds.
+      console.warn("[stressful] backend translate chunk failed", label, e);
+      showBanner(`Translation unavailable: ${(e as Error).message}`);
+      bannerUp = true;
+      return;
+    }
+    if (my !== gen) return;
     indices.forEach((srcIdx, i) => {
       translatedByIdx[srcIdx] = tr[i] ?? "";
     });
+    if (bannerUp) {
+      hideBanner();
+      bannerUp = false;
+    }
     console.log("[stressful] translate chunk", label, {
       cues: cues.length,
       ms: Math.round(performance.now() - ts),
@@ -150,27 +190,22 @@ async function backfillTranslations(
     lastPaint = performance.now();
   }
 
-  try {
-    if (order.length === 0) return;
-    await runChunk(order.slice(0, FIRST), "first");
+  if (order.length === 0) return;
+  await runChunk(order.slice(0, FIRST), "first");
 
-    const remaining: number[][] = [];
-    for (let s = FIRST; s < order.length; s += CHUNK) {
-      remaining.push(order.slice(s, s + CHUNK));
-    }
-    let next = 0;
-    async function worker(id: number) {
-      while (next < remaining.length) {
-        const my = next++;
-        await runChunk(remaining[my], `w${id}#${my}`);
-      }
-    }
-    await Promise.all(Array.from({ length: CONCURRENCY }, (_, i) => worker(i)));
-  } catch (e) {
-    console.warn("[stressful] backend translate chunk failed", e);
-    showBanner(`Translation unavailable: ${(e as Error).message}`);
-    return;
+  const remaining: number[][] = [];
+  for (let s = FIRST; s < order.length; s += CHUNK) {
+    remaining.push(order.slice(s, s + CHUNK));
   }
+  let next = 0;
+  async function worker(id: number) {
+    while (next < remaining.length && my === gen) {
+      const n = next++;
+      await runChunk(remaining[n], `w${id}#${n}`);
+    }
+  }
+  await Promise.all(Array.from({ length: CONCURRENCY }, (_, i) => worker(i)));
+  if (my !== gen) return;
   console.log("[stressful] backend translate done", {
     total_ms: Math.round(performance.now() - t0),
     last_paint_ms: Math.round(lastPaint - t0),
@@ -184,7 +219,7 @@ function showBanner(text: string) {
     banner = document.createElement("div");
     banner.id = "sr-banner";
     banner.style.cssText =
-      "position:fixed;top:12px;right:12px;z-index:2147483646;background:#7a1f1f;color:#fff;padding:8px 12px;border-radius:4px;font:13px/1.4 'Segoe UI',Arial,sans-serif;max-width:320px;box-shadow:0 4px 12px rgba(0,0,0,0.5);";
+      "position:fixed;top:12px;right:56px;z-index:2147483646;background:#7a1f1f;color:#fff;padding:8px 12px;border-radius:4px;font:13px/1.4 'Segoe UI',Arial,sans-serif;max-width:320px;box-shadow:0 4px 12px rgba(0,0,0,0.5);";
     document.body.appendChild(banner);
   }
   banner.textContent = text;

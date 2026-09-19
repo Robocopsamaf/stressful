@@ -76,6 +76,10 @@ function format(target: HTMLElement) {
   }
 }
 
+export function hideTooltip() {
+  if (tip) tip.style.display = "none";
+}
+
 function position(target: HTMLElement) {
   const t = ensureTip();
   const rect = target.getBoundingClientRect();
@@ -99,6 +103,6 @@ export function mountTooltip() {
   document.addEventListener("mouseout", (ev) => {
     const target = ev.target as HTMLElement | null;
     if (!target?.matches?.(".sr-tok[data-morph]")) return;
-    if (tip) tip.style.display = "none";
+    hideTooltip();
   });
 }

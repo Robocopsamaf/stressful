@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Dict, List, Tuple
+from contextlib import asynccontextmanager
+from typing import Any, Dict, List, Tuple
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,7 +9,14 @@ from pydantic import BaseModel
 
 from analyzer import AnalyzedSentence, Analyzer
 
-app = FastAPI(title="Stressful Analyzer", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    get_analyzer().warm("ru")
+    yield
+
+
+app = FastAPI(title="Stressful Analyzer", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -25,11 +33,6 @@ def get_analyzer() -> Analyzer:
     if _analyzer is None:
         _analyzer = Analyzer()
     return _analyzer
-
-
-@app.on_event("startup")
-def _warm_up() -> None:
-    get_analyzer().warm("ru")
 
 
 class AnalyzeRequest(BaseModel):
@@ -70,14 +73,34 @@ _TRANSLATE_CACHE: Dict[Tuple[str, str, str], str] = {}
 _TRANSLATE_CACHE_LIMIT = 16384
 
 
-def _translate_chunk(texts: List[str], source: str, target: str) -> List[str]:
+# The extension's language list uses YouTube's caption codes; Google Translate
+# spells a couple of them differently and rejects the YouTube spelling outright.
+_TARGET_ALIASES = {"zh-Hans": "zh-CN", "zh-Hant": "zh-TW"}
+
+
+def _make_translator(source: str, target: str) -> Any:
     from deep_translator import GoogleTranslator
 
-    translator = GoogleTranslator(source=source, target=target)
-    # translate_batch joins with newlines internally; some entries may come
-    # back as None when Google can't translate (proper nouns, single chars).
-    raw = translator.translate_batch(texts)
-    return [r if isinstance(r, str) else "" for r in raw]
+    return GoogleTranslator(source=source, target=_TARGET_ALIASES.get(target, target))
+
+
+def _translate_texts(translator: Any, texts: List[str]) -> List[str]:
+    """Translate one text at a time.
+
+    deep_translator's `translate_batch` is a plain loop over `translate()`
+    (one HTTP request per text) with no error isolation, so doing the loop
+    here costs nothing and keeps one bad entry — a length error, a rate
+    limit — from blanking every other text in the request.
+    """
+    out: List[str] = []
+    for text in texts:
+        try:
+            tr = translator.translate(text)
+        except Exception as e:
+            print(f"[translate] text failed: {type(e).__name__}: {e}", flush=True)
+            tr = ""
+        out.append(tr if isinstance(tr, str) else "")
+    return out
 
 
 @app.post("/translate", response_model=TranslateResponse)
@@ -86,6 +109,16 @@ def translate(req: TranslateRequest) -> TranslateResponse:
         return TranslateResponse(translations=[])
     if not req.target:
         raise HTTPException(status_code=400, detail="target language required")
+
+    # Validate up front so an unsupported code is an explicit 400 rather than a
+    # response full of empty strings.
+    try:
+        translator = _make_translator(req.source, req.target)
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unsupported language pair {req.source}->{req.target}: {type(e).__name__}",
+        )
 
     out: List[str] = [""] * len(req.texts)
     misses: List[int] = []
@@ -102,16 +135,7 @@ def translate(req: TranslateRequest) -> TranslateResponse:
             miss_texts.append(t)
 
     if miss_texts:
-        # Google rejects very large batches; chunk to be safe.
-        translated: List[str] = []
-        CHUNK = 50
-        for start in range(0, len(miss_texts), CHUNK):
-            piece = miss_texts[start : start + CHUNK]
-            try:
-                translated.extend(_translate_chunk(piece, req.source, req.target))
-            except Exception as e:
-                print(f"[translate] chunk failed: {type(e).__name__}: {e}", flush=True)
-                translated.extend([""] * len(piece))
+        translated = _translate_texts(translator, miss_texts)
         for idx, src, tr in zip(misses, miss_texts, translated):
             out[idx] = tr
             # Only cache successful (non-empty) translations, so cues that came

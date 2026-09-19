@@ -1,4 +1,5 @@
 import { AnalyzedSentence, Cue, Settings, Token } from "./types";
+import { hideTooltip } from "./tooltip";
 
 export interface OverlayDeps {
   root: HTMLElement;
@@ -67,17 +68,25 @@ function tokenToSpan(tok: Token, settings: Settings): HTMLElement {
   return span;
 }
 
+// Fallback only, for responses from a backend that predates Token.ws. No
+// punctuation rule gets кто-то right, which is why the tokenizer now tells us.
 const CLOSE_PUNCT = new Set([",", ".", "!", "?", ";", ":", ")", "]", "}", "»", "”", "’", "…"]);
 const OPEN_PUNCT = new Set(["(", "[", "{", "«", "“", "‘"]);
 
 function renderAnalyzed(target: HTMLElement, sentence: AnalyzedSentence, settings: Settings) {
+  // The hovered span is about to be removed, and mouseout never fires for a
+  // removed node, so the tooltip would hang around pointing at nothing.
+  hideTooltip();
   target.innerHTML = "";
   const tokens = sentence.tokens;
   for (let i = 0; i < tokens.length; i++) {
     const tok = tokens[i];
     if (i > 0) {
       const prev = tokens[i - 1];
-      const needSpace = !CLOSE_PUNCT.has(tok.surface) && !OPEN_PUNCT.has(prev.surface);
+      const needSpace =
+        prev.ws === undefined
+          ? !CLOSE_PUNCT.has(tok.surface) && !OPEN_PUNCT.has(prev.surface)
+          : prev.ws;
       if (needSpace) target.appendChild(document.createTextNode(" "));
     }
     target.appendChild(tokenToSpan(tok, settings));
@@ -113,7 +122,11 @@ export function mountOverlay(deps: OverlayDeps): Overlay {
     if (need.length === 0) return;
     try {
       const result = await analyze(need.map((n) => n.text));
-      result.forEach((s, k) => analyzed.set(need[k].idx, s));
+      // Never store undefined: `analyzed.has` would then block every retry and
+      // leave that cue plain for the rest of the session.
+      result.forEach((s, k) => {
+        if (s && need[k]) analyzed.set(need[k].idx, s);
+      });
       onAnalyzeOk?.();
     } catch (e) {
       console.warn("[stressful] analyze failed", e);
@@ -136,7 +149,10 @@ export function mountOverlay(deps: OverlayDeps): Overlay {
     // currentTime resets toward 0 and we'd wrongly show the video's first cue.
     // #movie_player carries the `ad-showing` class while an ad plays.
     if (root.classList.contains("ad-showing")) {
-      if (ruLine.textContent) ruLine.textContent = "";
+      if (ruLine.textContent) {
+        hideTooltip();
+        ruLine.textContent = "";
+      }
       if (trLine.textContent) trLine.textContent = "";
       lastTrText = "";
       currentIdx = -2; // force a re-render once the ad ends
@@ -149,6 +165,7 @@ export function mountOverlay(deps: OverlayDeps): Overlay {
     if (idx !== currentIdx) {
       currentIdx = idx;
       if (idx < 0) {
+        hideTooltip();
         ruLine.textContent = "";
         trLine.textContent = "";
         lastTrText = "";
@@ -159,6 +176,7 @@ export function mountOverlay(deps: OverlayDeps): Overlay {
       if (analyzedSentence) {
         renderAnalyzed(ruLine, analyzedSentence, settings);
       } else {
+        hideTooltip();
         ruLine.textContent = cue.text;
         ensureAnalyzed([idx]).then(() => {
           if (currentIdx === idx) {
@@ -197,6 +215,7 @@ export function mountOverlay(deps: OverlayDeps): Overlay {
   return {
     destroy() {
       stopped = true;
+      hideTooltip();
       cancelAnimationFrame(raf);
       wrap.remove();
     },
