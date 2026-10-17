@@ -1,0 +1,9 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.mutmut]
+source_paths = ["glossary.py", "analyzer.py"]
+pytest_add_cli_args_test_selection = ["tests/"]
+# Log lines only: mutating their text or `flush=` can't change behaviour.
+do_not_mutate_patterns = ['^\s*print\(']

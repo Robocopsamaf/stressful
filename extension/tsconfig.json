@@ -16,5 +16,5 @@
     "isolatedModules": true,
     "noEmit": true
   },
-  "include": ["src/**/*.ts", "public/**/*.ts", "build.mjs"]
+  "include": ["src/**/*.ts", "public/**/*.ts", "test/**/*.ts", "build.mjs", "vitest.config.ts"]
 }

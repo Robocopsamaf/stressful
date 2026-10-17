@@ -107,7 +107,10 @@ extension/
 │   ├── types.ts             Settings, Cue, Token, AnalyzedSentence, RuntimeMessage
 │   ├── background.ts        service worker, settings storage + message router
 │   ├── content.ts           entrypoint on youtube.com, drives setup/teardown across SPA navigations
-│   ├── captions.ts          requestCues() bridge wrapper, JSON3/XML parsing
+│   ├── captions.ts          requestCues() bridge wrapper
+│   ├── captions-parse.ts    JSON3/XML caption parsing (pure)
+│   ├── cue-search.ts        binary search for the cue at a time / the translated cue for a cue (pure)
+│   ├── video-id.ts          video id from a YouTube URL (pure)
 │   ├── api.ts               POST /analyze + POST /translate, caches by (source, text) and word+POS, in-flight dedupe
 │   ├── overlay.ts           single-line source overlay, rAF sync to video.currentTime, prefetch next N cues
 │   ├── tooltip.ts           hover tooltip: word + async gloss + lemma·POS + morphology
@@ -115,6 +118,9 @@ extension/
 │   ├── settings-panel.ts    in-page gear button + settings panel
 │   ├── options.ts           options page logic
 │   └── popup.ts             toolbar popup (enable toggle)
+├── test/                    vitest unit tests for the pure modules
+├── vitest.config.ts
+├── stryker.config.json      mutation testing config
 └── public/
     ├── options.html
     ├── popup.html
@@ -126,6 +132,9 @@ backend/
 ├── glossary.py              English Wiktionary lookup, POS-matched word senses
 ├── analyzer.py              per-language pipelines (ru: SpaCy + ruaccent; uk: SpaCy + ukrainian-word-stress)
 ├── requirements.txt         fastapi, uvicorn, pydantic, spacy, ruaccent, ukrainian-word-stress, deep-translator, requests
+├── requirements-dev.txt     pytest, mutmut
+├── pyproject.toml           pytest + mutmut config
+├── tests/                   pytest unit tests (no network, no models)
 ├── run.sh                   uvicorn launcher (auto-picks venv binary)
 └── README.md
 ```
@@ -231,3 +240,28 @@ skips the Wiktionary lookup and goes straight to machine translation.
 - Wiktionary glosses are English-only. Other target languages fall back to machine translation, which returns a single context-free sense (`в` on its own comes back as "V").
 - A word with no Wiktionary entry, or a reading SpaCy and Wiktionary disagree on, falls back to machine translation too. Google's free endpoint is rate-limited by IP, so a gloss can occasionally come back blank; blanks are never cached, so the next hover retries. Wiktionary itself can return HTTP 429 under heavy use, which also falls through to the fallback.
 - Belarusian is **not** supported. spaCy has no official `be` pipeline and there is no off-the-shelf BE stress library equivalent to ruaccent. See `SUPPORTED_SOURCES` in `content.ts` and `_PIPELINE_BUILDERS` in `analyzer.py` for the seam.
+
+## 9. Tests and mutation testing
+
+Unit tests cover the pure logic on both sides; mutation testing checks that those tests actually catch changes to it.
+
+```bash
+# Backend
+cd backend
+.venv/bin/pip install -r requirements-dev.txt
+.venv/bin/pytest -q
+.venv/bin/mutmut run          # mutants are written to backend/mutants/
+.venv/bin/mutmut results      # list survivors; `mutmut show <name>` prints the diff
+
+# Extension
+cd extension
+npm test
+npm run test:mutation         # HTML report: extension/reports/mutation/mutation.html
+```
+
+Backend tests use no network and load no models. `tests/conftest.py` sends the gloss cache to a temporary file, and a fake spaCy pipeline stands in for the real models. A fake HTTP session and a fake clock drive `_fetch_batch` and the throttle. mutmut does not mutate `print(` lines (`do_not_mutate_patterns`). The model loaders (`_patch_ruaccent_token_type_ids`, `_build_*_pipeline`) need the real models, so they show up as "no tests".
+
+The extension's pure helpers live in their own modules (`captions-parse.ts`, `cue-search.ts`, `video-id.ts`), and only those are mutated. Stryker is pinned to 8.x because 9+ needs Node ≥ 20/22, and jsdom is pinned to 26 for the same reason.
+
+The mutants that survive are equivalent: changing them does not change behaviour. Examples are a fallback default that leads to the same `[]`, `"utf-8"` → `"UTF-8"`, and in `findTranslatedFor` `<` → `<=`, where the equal case has already returned. When a new survivor shows up, read its diff. Either add a test that kills it, or note why it is equivalent.
+

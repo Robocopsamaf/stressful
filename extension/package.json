@@ -11,6 +11,8 @@
     "watch": "node build.mjs --target=firefox --watch",
     "dev": "node build.mjs --target=firefox --watch --run",
     "lint": "tsc --noEmit",
+    "test": "vitest run",
+    "test:mutation": "stryker run",
     "package:firefox": "npm run build:firefox && web-ext build --source-dir=dist-firefox --artifacts-dir=web-ext-artifacts --overwrite-dest",
     "package:chrome": "npm run build:chrome && cd dist-chrome && zip -r ../web-ext-artifacts/stressful-chrome.zip ."
   },
@@ -18,9 +20,14 @@
     "webextension-polyfill": "^0.12.0"
   },
   "devDependencies": {
+    "@stryker-mutator/core": "^8.7.1",
+    "@stryker-mutator/typescript-checker": "^8.7.1",
+    "@stryker-mutator/vitest-runner": "^8.7.1",
     "@types/webextension-polyfill": "^0.12.1",
     "esbuild": "^0.24.0",
+    "jsdom": "^26.1.0",
     "typescript": "^5.6.3",
+    "vitest": "^3.2.7",
     "web-ext": "^8.3.0"
   }
 }

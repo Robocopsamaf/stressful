@@ -62,8 +62,9 @@ makes the `zh-Hans` alias irrelevant to it.
 ### Verification harnesses (not preserved)
 
 Rebuilt to check the merge and left in the session scratchpad, which is gone.
-Worth rebuilding as real tests if this gets touched again — the repo has no
-test runner, so nothing here is wired into `npm test`.
+Worth rebuilding as real tests if this gets touched again. The repo now has
+pytest and vitest suites with mutation testing (DEVELOPMENT.md §9). They cover
+the pure helpers only, and none of the harnesses below has been ported yet.
 
 1. **Bridge** — loads `extension/public/page-fetch.js` verbatim into a `vm`
    context with a stubbed `window`/`fetch`/`XMLHttpRequest` and drives it over

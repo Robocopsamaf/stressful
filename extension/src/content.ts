@@ -5,6 +5,7 @@ import { mountOverlay, Overlay } from "./overlay";
 import { analyzeBatch, primeSettings, translateBatch } from "./api";
 import { mountTooltip } from "./tooltip";
 import { mountSettingsPanel } from "./settings-panel";
+import { videoIdFromHref } from "./video-id";
 
 console.log("[stressful] content script loaded", window.location.href);
 
@@ -43,19 +44,8 @@ async function getSettings(): Promise<Settings> {
   return resp;
 }
 
-// /watch and the embedded player carry the id in `?v=`; /shorts/, /live/ and
-// the old /embed/ and /v/ forms carry it in the path.
-const PATH_VIDEO_ID = /^\/(?:shorts|live|embed|v)\/([A-Za-z0-9_-]{6,})/;
-
 function videoIdFromUrl(): string | null {
-  try {
-    const u = new URL(window.location.href);
-    const v = u.searchParams.get("v");
-    if (v) return v;
-    return PATH_VIDEO_ID.exec(u.pathname)?.[1] ?? null;
-  } catch {
-    return null;
-  }
+  return videoIdFromHref(window.location.href);
 }
 
 // Gloss a single hovered word. Cheap and cached in api.ts — only words the user

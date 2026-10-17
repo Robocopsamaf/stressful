@@ -3,6 +3,8 @@ backend/.venv/
 backend/__pycache__/
 backend/**/__pycache__/
 *.pyc
+backend/.pytest_cache/
+backend/mutants/
 
 # Node / extension build
 extension/node_modules/
@@ -10,6 +12,8 @@ extension/dist/
 extension/dist-firefox/
 extension/dist-chrome/
 extension/web-ext-artifacts/
+extension/reports/
+extension/.stryker-tmp/
 
 # Editors / OS
 .DS_Store
