@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 from typing import Any, Dict, List, Optional
 
@@ -361,10 +362,17 @@ def test_load_cache_keeps_pipes_in_the_word(tmp_path, monkeypatch):
     "content",
     [
         "not json",
-        # Valid JSON of the wrong shape escapes the try block in _load_cache
-        # and raises at import time, so the backend fails to start.
-        pytest.param("[1, 2]", marks=pytest.mark.xfail(strict=True, reason="bug: _load_cache only guards json.load")),
-        pytest.param('{"no-pipes": 1}', marks=pytest.mark.xfail(strict=True, reason="bug: _load_cache only guards json.load")),
+        # Valid JSON of the wrong shape used to escape the try block and raise
+        # at import time, so the backend failed to start.
+        "[1, 2]",
+        "null",
+        '"ru|NOUN|дом"',
+        '{"no-pipes": "x"}',
+        '{"ru|NOUN": "x"}',
+        '{"ru|NOUN|дом": 1}',
+        '{"ru|NOUN|дом": ["house"]}',
+        # One bad entry rejects the whole file, good entries included.
+        '{"ru|NOUN|дом": "house", "bad": "x"}',
     ],
 )
 def test_load_cache_ignores_a_corrupt_file(content):
@@ -372,6 +380,44 @@ def test_load_cache_ignores_a_corrupt_file(content):
         fh.write(content)
     glossary._load_cache()
     assert glossary._CACHE == {}
+
+
+def test_load_cache_keeps_existing_entries_when_the_file_is_corrupt():
+    glossary._CACHE[("ru", "NOUN", "кот")] = "cat"
+    with open(glossary._CACHE_PATH, "w", encoding="utf-8") as fh:
+        fh.write('{"bad": "x"}')
+    glossary._load_cache()
+    assert glossary._CACHE == {("ru", "NOUN", "кот"): "cat"}
+
+
+def test_load_cache_accepts_null_glosses_and_empty_parts():
+    with open(glossary._CACHE_PATH, "w", encoding="utf-8") as fh:
+        json.dump({"ru||и": None, "uk|NOUN|": "x"}, fh)
+    glossary._load_cache()
+    assert glossary._CACHE == {("ru", "", "и"): None, ("uk", "NOUN", ""): "x"}
+
+
+def test_module_import_survives_a_wrong_shape_cache(tmp_path):
+    # The real failure: glossary loads its cache at import, so a bad file
+    # stopped the backend from starting. Import it fresh against one.
+    import subprocess
+    import sys
+
+    cache = tmp_path / "c.json"
+    cache.write_text('{"no-pipes": 1}', encoding="utf-8")
+    code = (
+        "import json, os, sys; sys.path.insert(0, os.getcwd());"
+        "real_open = open\n"
+        "import builtins\n"
+        f"builtins.open = lambda p, *a, **k: real_open({str(cache)!r} if str(p).endswith('.gloss-cache.json') else p, *a, **k)\n"
+        "import glossary; print('ok', len(glossary._CACHE))"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True, text=True, cwd=os.path.dirname(glossary.__file__),
+    )
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip().splitlines()[-1] == "ok 0"
 
 
 def test_load_cache_missing_file_is_a_cold_start():

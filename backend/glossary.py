@@ -101,18 +101,36 @@ _in_flight = 0
 _max_parallel = _PARALLEL_START
 
 
+def _decode_cache(raw: object) -> Dict[Tuple[str, str, str], Optional[str]]:
+    """The on-disk shape, {"source|pos|word": gloss-or-null}, as cache entries.
+
+    All or nothing: one malformed entry rejects the whole file, so a damaged
+    cache is never half-loaded.
+    """
+    if not isinstance(raw, dict):
+        raise ValueError(f"expected an object, got {type(raw).__name__}")
+
+    def entry(k: str, v: object) -> Tuple[Tuple[str, str, str], Optional[str]]:
+        parts = k.split("|", 2)
+        if len(parts) != 3:
+            raise ValueError(f"malformed key {k!r}")
+        if v is not None and not isinstance(v, str):
+            raise ValueError(f"malformed gloss for {k!r}")
+        return (parts[0], parts[1], parts[2]), v
+
+    return dict(entry(k, v) for k, v in raw.items())
+
+
 def _load_cache() -> None:
     try:
         with open(_CACHE_PATH, encoding="utf-8") as fh:
-            raw = json.load(fh)
+            entries = _decode_cache(json.load(fh))
     except FileNotFoundError:
         return
     except Exception as e:  # noqa: BLE001 - a bad cache file is not fatal
         print(f"[gloss] ignoring unreadable cache: {type(e).__name__}: {e}", flush=True)
         return
-    for k, v in raw.items():
-        source, pos, word = k.split("|", 2)
-        _CACHE[(source, pos, word)] = v
+    _CACHE.update(entries)
     print(f"[gloss] loaded {len(_CACHE)} cached entries", flush=True)
 
 
